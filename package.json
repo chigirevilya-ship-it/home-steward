@@ -1,0 +1,13 @@
+{
+  "name": "home-steward",
+  "version": "1.0.0",
+  "description": "Steward — self-hosted home advisory & concierge platform. Own SQL database (SQLite via node:sqlite), zero external dependencies.",
+  "type": "commonjs",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node server/index.js",
+    "seed": "node server/seed.js",
+    "reset": "node server/seed.js --reset"
+  },
+  "license": "UNLICENSED"
+}

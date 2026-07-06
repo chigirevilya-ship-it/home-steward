@@ -27,6 +27,10 @@ the server creates `data/steward.db`, applies the schema, and seeds demo data
 (two markets, five homes, a 24-rule maintenance library, a contractor
 network). To start over: `npm run reset`.
 
+**Deploying it for real?** See `DEPLOY.md` for running it in Docker on a NAS
+and putting it live behind a Cloudflare Tunnel — including the go-live
+checklist for replacing the demo passwords below before exposing it.
+
 ### Demo logins
 
 | Role | Email | Password |

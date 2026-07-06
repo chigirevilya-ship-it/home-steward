@@ -44,6 +44,16 @@ async function readJson(req) {
   }
 }
 
+// Best-effort real client IP behind a trusted reverse proxy (cloudflared).
+// Only used for rate-limiting/audit, never for authorization decisions.
+function clientIp(req) {
+  const cf = req.headers['cf-connecting-ip'];
+  if (cf) return cf;
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) return xff.split(',')[0].trim();
+  return req.socket.remoteAddress || 'unknown';
+}
+
 function parseCookies(req) {
   const out = {};
   const header = req.headers.cookie;
@@ -63,4 +73,4 @@ function pick(row, cols) {
   return out;
 }
 
-module.exports = { sendJson, sendError, readBody, readJson, parseCookies, pick, MAX_FILE_BODY };
+module.exports = { sendJson, sendError, readBody, readJson, parseCookies, clientIp, pick, MAX_FILE_BODY };

@@ -1,0 +1,35 @@
+services:
+  steward:
+    build: .
+    container_name: steward
+    restart: unless-stopped
+    environment:
+      # Set to 1 once you're only reachable over HTTPS (i.e. behind the
+      # cloudflared tunnel below, or any TLS-terminating proxy). Leave unset
+      # while testing over plain http://<nas-ip>:8710 on your LAN.
+      - COOKIE_SECURE=${COOKIE_SECURE:-1}
+    volumes:
+      - steward-data:/app/data
+    # Only needed if you want LAN access directly (bypassing the tunnel) too,
+    # e.g. http://<nas-ip>:8710. Remove if you only want it reachable via the
+    # tunnel — cloudflared reaches this container over the internal Docker
+    # network regardless of whether this port is published.
+    ports:
+      - "8710:8710"
+
+  # Cloudflare Tunnel: makes `steward` reachable at your chosen public
+  # hostname with no port-forwarding and automatic TLS. Requires a
+  # TUNNEL_TOKEN from the Cloudflare Zero Trust dashboard — see DEPLOY.md.
+  # Delete this service if you're fronting the app with your own tunnel/proxy.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: steward-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - steward
+
+volumes:
+  steward-data:

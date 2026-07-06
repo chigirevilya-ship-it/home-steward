@@ -12,11 +12,46 @@ const staffRoutes = require('./routes').routes;
 const portalRoutes = require('./portal').routes;
 const { clientProperty, getClient } = require('./portal');
 const { renderHomeRecord } = require('./export');
-const { sendJson, sendError, readJson, readBody, parseCookies, MAX_FILE_BODY } = require('./http-util');
+const { sendJson, sendError, readJson, readBody, parseCookies, clientIp, MAX_FILE_BODY } = require('./http-util');
 
 const PORT = Number(process.env.PORT || 8710);
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+
+// Set COOKIE_SECURE=1 when the app is reachable only over HTTPS (e.g. behind
+// a Cloudflare Tunnel or any TLS-terminating reverse proxy). Leave unset for
+// plain-HTTP local/LAN testing — browsers silently drop Secure cookies over http.
+const COOKIE_SECURE = process.env.COOKIE_SECURE === '1' ? '; Secure' : '';
+const sessionCookie = (token) => `steward_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=43200${COOKIE_SECURE}`;
+
+// Login rate limiting — this app will be reachable from the open internet,
+// so brute-forcing the fixed set of accounts needs a real cost. In-memory is
+// fine for a single-process NAS deployment; resets on restart.
+const LOGIN_MAX_ATTEMPTS = 10;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const loginAttempts = new Map(); // key: ip -> { count, resetAt }
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip);
+  if (!entry || entry.resetAt < now) {
+    loginAttempts.set(ip, { count: 0, resetAt: now + LOGIN_WINDOW_MS });
+    return true;
+  }
+  return entry.count < LOGIN_MAX_ATTEMPTS;
+}
+function recordLoginFailure(ip) {
+  const entry = loginAttempts.get(ip);
+  if (entry) entry.count++;
+}
+function clearLoginAttempts(ip) {
+  loginAttempts.delete(ip);
+}
+// Prevent unbounded growth from scanning bots hitting many source IPs.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of loginAttempts) if (entry.resetAt < now) loginAttempts.delete(ip);
+}, 10 * 60 * 1000).unref();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -29,6 +64,11 @@ const MIME = {
 // ── auth endpoints ─────────────────────────────────────────────────────────
 
 async function handleLogin(req, res) {
+  const ip = clientIp(req);
+  if (!checkRateLimit(ip)) {
+    return sendError(res, 429, 'Too many login attempts. Try again in a few minutes.');
+  }
+
   const db = open();
   const body = await readJson(req);
   const email = String(body.email || '').trim().toLowerCase();
@@ -37,20 +77,23 @@ async function handleLogin(req, res) {
 
   const staff = db.prepare('SELECT * FROM users WHERE lower(email) = ? AND active = 1').get(email);
   if (staff && auth.verifyPassword(password, staff.password_hash)) {
+    clearLoginAttempts(ip);
     const token = auth.createSession('staff', staff.id);
     audit('staff', staff.id, 'login', 'users', staff.id, null);
-    res.setHeader('Set-Cookie', `steward_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=43200`);
+    res.setHeader('Set-Cookie', sessionCookie(token));
     const { password_hash, ...user } = staff;
     return sendJson(res, 200, { kind: 'staff', user });
   }
   const client = db.prepare('SELECT * FROM clients WHERE lower(email) = ?').get(email);
   if (client && auth.verifyPassword(password, client.password_hash)) {
+    clearLoginAttempts(ip);
     const token = auth.createSession('client', client.id);
     audit('client', client.id, 'login', 'clients', client.id, null);
-    res.setHeader('Set-Cookie', `steward_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=43200`);
+    res.setHeader('Set-Cookie', sessionCookie(token));
     const { password_hash, notes, ...user } = client; // household notes are internal-only
     return sendJson(res, 200, { kind: 'client', user });
   }
+  recordLoginFailure(ip);
   sendError(res, 401, 'Invalid email or password');
 }
 

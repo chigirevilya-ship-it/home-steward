@@ -154,7 +154,23 @@ route('GET', /^\/api\/dashboard$/, async (req, res, { staff, query }) => {
     } : null;
   }).filter(Boolean);
 
-  sendJson(res, 200, { clients, items, visitsToday, requests, cadence, today: t });
+  // Warranty reminders: equipment and systems with warranties expired or
+  // ending within 90 days (reminder-only — never schedule items).
+  const wScope = mine
+    ? { sql: 'c.advisor_id = ?', params: [staff.id] }
+    : scopedWhere(marketId, 'p.market_id');
+  const warranties = db.prepare(
+    `SELECT 'equipment' AS kind, e.id, e.name, e.warranty_expiry, p.id AS property_id, p.address_line1, c.first_name, c.last_name
+     FROM equipment e JOIN properties p ON p.id = e.property_id JOIN clients c ON c.id = p.client_id
+     WHERE e.active = 1 AND e.warranty_expiry IS NOT NULL AND e.warranty_expiry <= ? AND ${wScope.sql}
+     UNION ALL
+     SELECT 'system' AS kind, s.id, s.system_name AS name, s.warranty_expiry, p.id AS property_id, p.address_line1, c.first_name, c.last_name
+     FROM systems s JOIN properties p ON p.id = s.property_id JOIN clients c ON c.id = p.client_id
+     WHERE s.warranty_expiry IS NOT NULL AND s.warranty_expiry <= ? AND ${wScope.sql}
+     ORDER BY warranty_expiry`).all(rel(90), ...wScope.params, rel(90), ...wScope.params);
+  for (const w of warranties) w.expired = w.warranty_expiry < t ? 1 : 0;
+
+  sendJson(res, 200, { clients, items, visitsToday, requests, cadence, warranties, today: t });
 });
 
 // ── Clients ───────────────────────────────────────────────────────────────
@@ -258,6 +274,17 @@ route('GET', /^\/api\/properties\/(\d+)\/record$/, async (req, res, { staff, par
     }))
     .sort((a, b) => (a.remaining_life ?? 999) - (b.remaining_life ?? 999));
 
+  const equipment = db.prepare(
+    `SELECT e.*, s.system_name FROM equipment e LEFT JOIN systems s ON s.id = e.system_id
+     WHERE e.property_id = ? AND e.active = 1 ORDER BY e.name`).all(pid)
+    .map((e) => ({
+      ...e,
+      age_years: rulesEngine.systemAgeYears(e, property) != null
+        ? Math.round(rulesEngine.systemAgeYears(e, property) * 10) / 10 : null,
+      remaining_life: rulesEngine.remainingLife(e, property),
+      warranty_status: rulesEngine.warrantyStatus(e.warranty_expiry),
+    }));
+
   const schedule = db.prepare(
     `SELECT f.*, s.system_name, ct.company_name AS contractor_name
      FROM forward_schedule f LEFT JOIN systems s ON s.id = f.system_id
@@ -267,8 +294,9 @@ route('GET', /^\/api\/properties\/(\d+)\/record$/, async (req, res, { staff, par
   for (const it of schedule) it.overdue = ['upcoming','scheduled'].includes(it.status) && it.due_date && it.due_date < t ? 1 : 0;
 
   const log = db.prepare(
-    `SELECT l.*, s.system_name, ct.company_name AS contractor_name
+    `SELECT l.*, s.system_name, e.name AS equipment_name, ct.company_name AS contractor_name
      FROM maintenance_log l LEFT JOIN systems s ON s.id = l.system_id
+     LEFT JOIN equipment e ON e.id = l.equipment_id
      LEFT JOIN contractors ct ON ct.id = l.contractor_id
      WHERE l.property_id = ? ORDER BY l.date DESC`).all(pid);
 
@@ -281,10 +309,14 @@ route('GET', /^\/api\/properties\/(\d+)\/record$/, async (req, res, { staff, par
      WHERE v.property_id = ? ORDER BY v.visit_date DESC`).all(pid);
 
   const documents = db.prepare(
-    `SELECT d.*, u.full_name AS uploaded_by_name FROM documents d
-     LEFT JOIN users u ON u.id = d.uploaded_by_user WHERE d.property_id = ? ORDER BY d.upload_date DESC`).all(pid);
+    `SELECT d.*, u.full_name AS uploaded_by_name, s.system_name, e.name AS equipment_name
+     FROM documents d
+     LEFT JOIN users u ON u.id = d.uploaded_by_user
+     LEFT JOIN systems s ON s.id = d.system_id
+     LEFT JOIN equipment e ON e.id = d.equipment_id
+     WHERE d.property_id = ? ORDER BY d.upload_date DESC`).all(pid);
 
-  sendJson(res, 200, { property, client, systems, schedule, log, permits, visits, documents, disclaimer: SCOPE_DISCLAIMER });
+  sendJson(res, 200, { property, client, systems, equipment, schedule, log, permits, visits, documents, disclaimer: SCOPE_DISCLAIMER });
 });
 
 route('POST', /^\/api\/properties$/, async (req, res, { staff }) => {
@@ -360,6 +392,44 @@ route('PATCH', /^\/api\/systems\/(\d+)$/, async (req, res, { staff, params }) =>
   sendJson(res, 200, { ...db.prepare('SELECT * FROM systems WHERE id = ?').get(id), generated_items: gen.created });
 });
 
+// ── Equipment (informational + warranty reminders; no rules-engine join) ──
+const EQUIPMENT_COLS = ['property_id','system_id','name','description','make','model_number','serial_number',
+  'install_date','expected_lifespan','warranty_expiry','condition_rating','advisor_notes','active'];
+
+function assertEquipmentSystemLink(db, propertyId, systemId) {
+  if (systemId == null) return;
+  const s = db.prepare('SELECT property_id FROM systems WHERE id = ?').get(systemId);
+  if (!s || s.property_id !== propertyId) {
+    throw Object.assign(new Error('That system belongs to a different property'), { status: 400 });
+  }
+}
+
+route('POST', /^\/api\/equipment$/, async (req, res, { staff }) => {
+  const db = open();
+  const body = await readJson(req);
+  if (!body.name || !body.property_id) return sendError(res, 400, 'name and property_id are required');
+  assertPropertyAccess(db, staff, body.property_id);
+  assertEquipmentSystemLink(db, body.property_id, body.system_id);
+  const { sql, params: p } = buildInsert('equipment', EQUIPMENT_COLS, body);
+  const id = db.prepare(sql).run(...p).lastInsertRowid;
+  audit('staff', staff.id, 'create', 'equipment', id, body.name);
+  sendJson(res, 201, db.prepare('SELECT * FROM equipment WHERE id = ?').get(id));
+});
+
+route('PATCH', /^\/api\/equipment\/(\d+)$/, async (req, res, { staff, params }) => {
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM equipment WHERE id = ?').get(id);
+  if (!existing) return sendError(res, 404, 'Equipment not found');
+  assertPropertyAccess(db, staff, existing.property_id);
+  const body = await readJson(req);
+  if (body.system_id !== undefined) assertEquipmentSystemLink(db, existing.property_id, body.system_id);
+  const { sql, params: p } = buildUpdate('equipment', EQUIPMENT_COLS.filter((c) => c !== 'property_id'), body, id);
+  db.prepare(sql).run(...p);
+  audit('staff', staff.id, 'update', 'equipment', id, Object.keys(body).join(','));
+  sendJson(res, 200, db.prepare('SELECT * FROM equipment WHERE id = ?').get(id));
+});
+
 // ── Permits ───────────────────────────────────────────────────────────────
 const PERMIT_COLS = ['property_id','permit_number','date_filed','date_finaled','status','permit_type',
   'scope_description','contractor_of_record','final_inspection_passed','gap_flag','gap_notes','researched_date','researched_by'];
@@ -407,9 +477,13 @@ route('POST', /^\/api\/maintenance-log$/, async (req, res, { staff }) => {
   }
   assertPropertyAccess(db, staff, body.property_id);
   const contractor = assertContractorReferable(db, body.contractor_id);
+  if (body.equipment_id) {
+    const e = db.prepare('SELECT property_id FROM equipment WHERE id = ?').get(body.equipment_id);
+    if (!e || e.property_id !== body.property_id) return sendError(res, 400, 'That equipment belongs to a different property');
+  }
 
-  const LOG_COLS = ['property_id','system_id','date','description','contractor_id','invoice_amount',
-    'invoice_reference','advisor_present','outcome_notes','updated_system_record','forward_item_generated'];
+  const LOG_COLS = ['property_id','system_id','equipment_id','date','description','contractor_id','invoice_amount',
+    'invoice_reference','advisor_present','outcome_notes','updated_system_record','forward_item_generated','performed_by'];
   const { sql, params: p } = buildInsert('maintenance_log', LOG_COLS, body);
   const logId = db.prepare(sql).run(...p).lastInsertRowid;
   audit('staff', staff.id, 'create', 'maintenance_log', logId, body.description.slice(0, 80));

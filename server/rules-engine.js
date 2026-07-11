@@ -82,6 +82,20 @@ function matchRules(db, system, property) {
   });
 }
 
+// For recurring rules whose anchor is far in the past (an old install date,
+// never serviced), surface only the most recent missed occurrence — "the
+// annual service was due in May", never "due 14 years ago".
+function advanceRecurrence(base, value, unit, t) {
+  let due = addUnits(base, value, unit);
+  let guard = 0;
+  while (due < t && guard++ < 600) {
+    const next = addUnits(due, value, unit);
+    if (next > t) break; // `due` is the most recent missed occurrence
+    due = next;
+  }
+  return due;
+}
+
 // Step 2 — calculate the next due date for a rule applied to a system.
 // Returns null when the rule doesn't currently produce an item.
 function calcDueDate(rule, system, property) {
@@ -90,11 +104,11 @@ function calcDueDate(rule, system, property) {
 
   switch (rule.frequency_type) {
     case 'recurring_annual':
-      return addYears(base, 1);
+      return advanceRecurrence(base, 1, 'years', t);
     case 'recurring_monthly':
-      return addUnits(base, rule.frequency_value || 1, 'months');
+      return advanceRecurrence(base, rule.frequency_value || 1, 'months', t);
     case 'recurring_custom':
-      return addUnits(base, rule.frequency_value || 1, rule.frequency_unit || 'months');
+      return advanceRecurrence(base, rule.frequency_value || 1, rule.frequency_unit || 'months', t);
     case 'recurring_seasonal':
       return nextSeasonal(rule.seasonal_timing || 'spring', t);
     case 'age_based': {
@@ -217,7 +231,17 @@ function propagationPreview(rule) {
   return { properties: affected.size, systems: rows.length };
 }
 
+// Warranty posture for equipment/systems: 'expired', 'expiring' (≤90 days),
+// 'active', or null when no warranty is recorded. Reminder-only by design —
+// warranties never generate Forward Schedule items.
+function warrantyStatus(expiry, asOf = today()) {
+  if (!expiry) return null;
+  if (expiry < asOf) return 'expired';
+  const days = (new Date(expiry + 'T00:00:00Z') - new Date(asOf + 'T00:00:00Z')) / DAY;
+  return days <= 90 ? 'expiring' : 'active';
+}
+
 module.exports = {
   generateForProperty, recomputeAll, propagationPreview,
-  remainingLife, systemAgeYears, dueWindowFor,
+  remainingLife, systemAgeYears, dueWindowFor, warrantyStatus,
 };

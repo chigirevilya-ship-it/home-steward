@@ -18,14 +18,18 @@ const rel = (days) => new Date(Date.now() + days * DAY).toISOString().slice(0, 1
 const VISIBLE = {
   system: ['id','system_name','category','description','install_date','expected_lifespan','condition_rating',
     'model_number','warranty_expiry','last_service_date','age_years','remaining_life'],
+  equipment: ['id','system_id','system_name','name','description','make','model_number','serial_number',
+    'install_date','expected_lifespan','warranty_expiry','condition_rating','age_years','remaining_life','warranty_status'],
   schedule: ['id','item_name','system_id','system_name','due_date','due_window','priority','status',
     'est_cost_low','est_cost_high','capital_forecast_item','completed_date','deferral_risk','contractor_name','overdue'],
-  log: ['id','system_id','system_name','date','description','contractor_name','invoice_amount','outcome_notes'],
+  log: ['id','system_id','system_name','equipment_id','equipment_name','date','description','contractor_name',
+    'performed_by','invoice_amount','outcome_notes'],
   permit: ['id','permit_number','date_filed','date_finaled','status','permit_type','scope_description',
     'contractor_of_record','final_inspection_passed','gap_flag','gap_notes'],
   visit: ['id','visit_date','visit_type','advisor_name','systems_reviewed','findings_summary'],
   contractor: ['id','company_name','primary_contact','email','phone','trades','preferred_pricing'],
-  document: ['id','document_name','document_type','mime_type','size_bytes','system_id','description','upload_date'],
+  document: ['id','document_name','document_type','mime_type','size_bytes','system_id','system_name',
+    'equipment_id','equipment_name','maintenance_log_id','description','upload_date'],
   property: ['id','address_line1','address_line2','city','state','zip','year_built','square_footage','stories',
     'bedrooms','bathrooms','property_type','construction_type','foundation_type','ownership_date',
     'permit_jurisdiction','intake_date','record_completeness','narrative_summary'],
@@ -64,6 +68,17 @@ function buildPortalRecord(client, property) {
     }, VISIBLE.system))
     .sort((a, b) => (a.remaining_life ?? 999) - (b.remaining_life ?? 999));
 
+  const equipment = db.prepare(
+    `SELECT e.*, s.system_name FROM equipment e LEFT JOIN systems s ON s.id = e.system_id
+     WHERE e.property_id = ? AND e.active = 1 ORDER BY e.name`).all(pid)
+    .map((e) => pick({
+      ...e,
+      age_years: rulesEngine.systemAgeYears(e, property) != null
+        ? Math.round(rulesEngine.systemAgeYears(e, property) * 10) / 10 : null,
+      remaining_life: rulesEngine.remainingLife(e, property),
+      warranty_status: rulesEngine.warrantyStatus(e.warranty_expiry),
+    }, VISIBLE.equipment));
+
   const schedule = db.prepare(
     `SELECT f.*, s.system_name, ct.company_name AS contractor_name
      FROM forward_schedule f LEFT JOIN systems s ON s.id = f.system_id
@@ -73,8 +88,9 @@ function buildPortalRecord(client, property) {
     .map((it) => pick({ ...it, overdue: it.due_date && it.due_date < t ? 1 : 0 }, VISIBLE.schedule));
 
   const log = db.prepare(
-    `SELECT l.*, s.system_name, ct.company_name AS contractor_name
+    `SELECT l.*, s.system_name, e.name AS equipment_name, ct.company_name AS contractor_name
      FROM maintenance_log l LEFT JOIN systems s ON s.id = l.system_id
+     LEFT JOIN equipment e ON e.id = l.equipment_id
      LEFT JOIN contractors ct ON ct.id = l.contractor_id
      WHERE l.property_id = ? ORDER BY l.date DESC`).all(pid)
     .map((r) => pick(r, VISIBLE.log));
@@ -98,7 +114,11 @@ function buildPortalRecord(client, property) {
      ) ORDER BY c.company_name`).all(pid, pid)
     .map((c) => pick({ ...c, trades: JSON.parse(c.trades || '[]') }, VISIBLE.contractor));
 
-  const documents = db.prepare('SELECT * FROM documents WHERE property_id = ? ORDER BY upload_date DESC').all(pid)
+  const documents = db.prepare(
+    `SELECT d.*, s.system_name, e.name AS equipment_name FROM documents d
+     LEFT JOIN systems s ON s.id = d.system_id
+     LEFT JOIN equipment e ON e.id = d.equipment_id
+     WHERE d.property_id = ? ORDER BY d.upload_date DESC`).all(pid)
     .map((r) => pick(r, VISIBLE.document));
 
   // Capital forecast is tier-scoped: Managed + Concierge only (business rule #8).
@@ -122,6 +142,8 @@ function buildPortalRecord(client, property) {
     tier_label: TIERS[client.tier]?.label || client.tier,
     self_serve: client.tier === 'self_serve',
     categories: SYSTEM_CATEGORIES,
+    warranty_flags: equipment.filter((e) => ['expired', 'expiring'].includes(e.warranty_status))
+      .map((e) => ({ id: e.id, name: e.name, warranty_expiry: e.warranty_expiry, status: e.warranty_status })),
     advisor,
     property: pick(property, VISIBLE.property),
     properties_count: undefined,
@@ -130,6 +152,7 @@ function buildPortalRecord(client, property) {
     fee_disclosure: 'Steward receives a referral fee from network contractors, paid by the contractor and disclosed in your service agreement. You are never charged more because of it.',
     disclaimer: SCOPE_DISCLAIMER,
     today: t,
+    equipment,
   };
 }
 
@@ -280,6 +303,103 @@ route('POST', /^\/api\/portal\/recompute$/, async (req, res, { session }) => {
   sendJson(res, 200, rulesEngine.generateForProperty(property.id, { kind: 'client', id: client.id }));
 });
 
+// ── Self-Serve equipment (warranty/lifespan record-keeping) ────────────────
+const EQUIPMENT_WRITE = ['system_id','name','description','make','model_number','serial_number',
+  'install_date','expected_lifespan','warranty_expiry','condition_rating','active'];
+
+function assertOwnSystem(db, property, systemId) {
+  if (systemId == null) return;
+  const s = db.prepare('SELECT property_id FROM systems WHERE id = ?').get(systemId);
+  if (!s || s.property_id !== property.id) {
+    throw Object.assign(new Error('That system is not on your home'), { status: 400 });
+  }
+}
+function assertOwnEquipment(db, property, equipmentId) {
+  if (equipmentId == null) return;
+  const e = db.prepare('SELECT property_id FROM equipment WHERE id = ?').get(equipmentId);
+  if (!e || e.property_id !== property.id) {
+    throw Object.assign(new Error('That equipment is not on your home'), { status: 400 });
+  }
+}
+
+route('POST', /^\/api\/portal\/equipment$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const body = await readJson(req);
+  if (!body.name) return sendError(res, 400, 'Give the equipment a name');
+  const db = open();
+  assertOwnSystem(db, property, body.system_id);
+  const cols = EQUIPMENT_WRITE.filter((c) => body[c] !== undefined && body[c] !== null);
+  const id = db.prepare(
+    `INSERT INTO equipment (${cols.join(',')}${cols.length ? ',' : ''}property_id) VALUES (${cols.map(() => '?').join(',')}${cols.length ? ',' : ''}?)`
+  ).run(...cols.map((c) => body[c]), property.id).lastInsertRowid;
+  audit('client', client.id, 'create', 'equipment', id, body.name);
+  sendJson(res, 201, { id });
+});
+
+route('PATCH', /^\/api\/portal\/equipment\/(\d+)$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM equipment WHERE id = ?').get(id);
+  if (!existing || existing.property_id !== property.id) return sendError(res, 404, 'Not your equipment');
+  const body = await readJson(req);
+  if (body.system_id !== undefined) assertOwnSystem(db, property, body.system_id);
+  const cols = EQUIPMENT_WRITE.filter((c) => body[c] !== undefined);
+  if (!cols.length) return sendError(res, 400, 'Nothing to update');
+  db.prepare(`UPDATE equipment SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+    .run(...cols.map((c) => body[c]), id);
+  audit('client', client.id, 'update', 'equipment', id, cols.join(','));
+  sendJson(res, 200, { updated: id });
+});
+
+// ── Self-Serve service logging (both flows: mark-done and ad-hoc) ─────────
+// A slim version of the advisor job-completion: closes the schedule item if
+// one is given, updates the system's last-service date, and regenerates the
+// next recurrence. No contractor network, so "performed by" is free text.
+route('POST', /^\/api\/portal\/service$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const body = await readJson(req);
+  if (!body.date || !body.description) return sendError(res, 400, 'Date and a description of the work are required');
+  const db = open();
+  assertOwnSystem(db, property, body.system_id);
+  assertOwnEquipment(db, property, body.equipment_id);
+
+  let forwardItem = null;
+  if (body.forward_item_id) {
+    forwardItem = db.prepare('SELECT * FROM forward_schedule WHERE id = ?').get(body.forward_item_id);
+    if (!forwardItem || forwardItem.property_id !== property.id) return sendError(res, 404, 'Not your schedule item');
+    if (!['upcoming', 'scheduled'].includes(forwardItem.status)) return sendError(res, 409, 'That item is already closed');
+  }
+
+  const logId = db.prepare(
+    `INSERT INTO maintenance_log (property_id, system_id, equipment_id, date, description, invoice_amount, performed_by, outcome_notes)
+     VALUES (?,?,?,?,?,?,?,?)`
+  ).run(property.id, body.system_id ?? forwardItem?.system_id ?? null, body.equipment_id ?? null,
+    body.date, body.description, body.invoice_amount ?? null, body.performed_by ?? null, body.outcome_notes ?? null).lastInsertRowid;
+  audit('client', client.id, 'create', 'maintenance_log', logId, body.description.slice(0, 80));
+
+  if (forwardItem) {
+    db.prepare(`UPDATE forward_schedule SET status = 'completed', completed_date = ?, maintenance_log_id = ? WHERE id = ?`)
+      .run(body.date, logId, forwardItem.id);
+    audit('client', client.id, 'update', 'forward_schedule', forwardItem.id, 'completed via portal service log');
+  }
+  const systemId = body.system_id ?? forwardItem?.system_id;
+  if (systemId) db.prepare('UPDATE systems SET last_service_date = ? WHERE id = ?').run(body.date, systemId);
+
+  const gen = rulesEngine.generateForProperty(property.id, { kind: 'client', id: client.id });
+  sendJson(res, 201, {
+    log_id: logId,
+    closed_forward_item: forwardItem?.id ?? null,
+    next_items_generated: gen.created,
+  });
+});
+
 route('GET', /^\/api\/portal\/requests$/, async (req, res, { session }) => {
   const client = getClient(session);
   sendJson(res, 200, open().prepare(
@@ -296,14 +416,26 @@ route('POST', /^\/api\/portal\/documents$/, async (req, res, { session, query })
   const buf = await readBody(req, MAX_FILE_BODY);
   if (!buf.length) return sendError(res, 400, 'Empty upload');
 
+  const db = open();
+  // Optional relates-to links, each verified against the client's own home.
+  const systemId = Number(query.get('system_id')) || null;
+  const equipmentId = Number(query.get('equipment_id')) || null;
+  const logId = Number(query.get('log_id')) || null;
+  assertOwnSystem(db, property, systemId);
+  assertOwnEquipment(db, property, equipmentId);
+  if (logId) {
+    const l = db.prepare('SELECT property_id FROM maintenance_log WHERE id = ?').get(logId);
+    if (!l || l.property_id !== property.id) return sendError(res, 400, 'That service entry is not on your home');
+  }
+
   const fileName = `${Date.now()}-c${client.id}-${name}`;
   fs.writeFileSync(path.join(FILES_DIR, fileName), buf);
-  const db = open();
   const id = db.prepare(
-    `INSERT INTO documents (document_name, document_type, file_path, mime_type, size_bytes, property_id, description, upload_date, uploaded_by_client)
-     VALUES (?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO documents (document_name, document_type, file_path, mime_type, size_bytes, property_id, system_id, equipment_id, maintenance_log_id, description, upload_date, uploaded_by_client)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(name, type, fileName, req.headers['content-type'] || 'application/octet-stream',
-    buf.length, property.id, query.get('description') || null, today(), client.id).lastInsertRowid;
+    buf.length, property.id, systemId, equipmentId, logId,
+    query.get('description') || null, today(), client.id).lastInsertRowid;
   audit('client', client.id, 'create', 'documents', id, name);
   sendJson(res, 201, pick(db.prepare('SELECT * FROM documents WHERE id = ?').get(id), VISIBLE.document));
 });

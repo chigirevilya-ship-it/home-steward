@@ -98,6 +98,27 @@ CREATE TABLE IF NOT EXISTS systems (
   advisor_notes     TEXT                 -- internal only
 );
 
+-- Equipment: individual components with their own lifespan/warranty story.
+-- Finer-grained than a system and optionally attached to one (a condenser and
+-- air handler inside "HVAC - Cooling"), or freestanding (a generator).
+-- Informational + warranty reminders only: the rules engine runs on systems.
+CREATE TABLE IF NOT EXISTS equipment (
+  id                INTEGER PRIMARY KEY,
+  property_id       INTEGER NOT NULL REFERENCES properties(id),
+  system_id         INTEGER REFERENCES systems(id),   -- optional parent system
+  name              TEXT NOT NULL,
+  description       TEXT,
+  make              TEXT,
+  model_number      TEXT,
+  serial_number     TEXT,
+  install_date      TEXT,
+  expected_lifespan REAL,                             -- years
+  warranty_expiry   TEXT,
+  condition_rating  INTEGER CHECK (condition_rating BETWEEN 1 AND 5 OR condition_rating IS NULL),
+  advisor_notes     TEXT,                             -- internal only
+  active            INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS permits (
   id                      INTEGER PRIMARY KEY,
   property_id             INTEGER NOT NULL REFERENCES properties(id),
@@ -127,7 +148,9 @@ CREATE TABLE IF NOT EXISTS maintenance_log (
   advisor_present        INTEGER NOT NULL DEFAULT 0,
   outcome_notes          TEXT,
   updated_system_record  INTEGER NOT NULL DEFAULT 0,
-  forward_item_generated INTEGER NOT NULL DEFAULT 0
+  forward_item_generated INTEGER NOT NULL DEFAULT 0,
+  equipment_id           INTEGER REFERENCES equipment(id),
+  performed_by           TEXT               -- free text: self-serve / non-network work
 );
 
 CREATE TABLE IF NOT EXISTS forward_schedule (
@@ -247,6 +270,7 @@ CREATE TABLE IF NOT EXISTS documents (
   size_bytes         INTEGER,
   property_id        INTEGER REFERENCES properties(id),
   system_id          INTEGER REFERENCES systems(id),
+  equipment_id       INTEGER REFERENCES equipment(id),
   maintenance_log_id INTEGER REFERENCES maintenance_log(id),
   permit_id          INTEGER REFERENCES permits(id),
   description        TEXT,
@@ -317,6 +341,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_properties_client  ON properties(client_id);
 CREATE INDEX IF NOT EXISTS idx_properties_market  ON properties(market_id);
 CREATE INDEX IF NOT EXISTS idx_systems_property   ON systems(property_id);
+CREATE INDEX IF NOT EXISTS idx_equipment_property ON equipment(property_id);
 CREATE INDEX IF NOT EXISTS idx_permits_property   ON permits(property_id);
 CREATE INDEX IF NOT EXISTS idx_log_property       ON maintenance_log(property_id);
 CREATE INDEX IF NOT EXISTS idx_fwd_property       ON forward_schedule(property_id);

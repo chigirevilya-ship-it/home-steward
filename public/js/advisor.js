@@ -86,6 +86,19 @@ export async function renderDashboard(view) {
     </div>
   </div>
 
+  ${d.warranties?.length ? `
+  <div class="section"><div class="section-head"><h2>Warranties — expired or ending within 90 days</h2>
+    <span class="small muted">reminder only; never a schedule item</span></div>
+    <div class="card card-pad">
+      ${d.warranties.map((w) => `<div class="item-line">
+        <span class="badge ${w.expired ? 'b-critical' : 'b-serious'}">${w.expired ? '■ expired' : '▲ expiring'}</span>
+        <b>${esc(w.name)}</b> <span class="chip">${w.kind}</span>
+        <span class="small muted">${esc(w.address_line1)} · ${esc(w.first_name)} ${esc(w.last_name)}</span>
+        <span class="right"><a class="small" href="#/property/${w.property_id}">${fmtDate(w.warranty_expiry)} →</a></span>
+      </div>`).join('')}
+    </div>
+  </div>` : ''}
+
   <div class="section"><div class="section-head"><h2>${isAdvisor ? 'My clients' : 'Clients'}</h2></div>
     <div class="table-wrap"><table>
       <thead><tr><th>Client</th><th>Tier</th><th>Status</th><th>Advisor</th><th>Renewal</th><th>Homes</th><th></th></tr></thead>
@@ -277,7 +290,7 @@ export async function renderPropertyRecord(view, id) {
   </div>
 
   <div class="tabs" id="tabs">
-    <button data-tab="systems" class="active">Systems (${r.systems.length})</button>
+    <button data-tab="systems" class="active">Systems (${r.systems.length}) & Equipment (${r.equipment.length})</button>
     <button data-tab="schedule">Forward Schedule (${open.length})</button>
     <button data-tab="log">History (${r.log.length})</button>
     <button data-tab="permits">Permits (${r.permits.length})</button>
@@ -320,8 +333,42 @@ export async function renderPropertyRecord(view, id) {
   $('#act-permit', view).addEventListener('click', () => permitModal(id, () => renderPropertyRecord(view, id)));
 }
 
+export function warrantyBadge(status, expiry) {
+  if (status === 'expired') return `<span class="badge b-critical">■ warranty expired</span>`;
+  if (status === 'expiring') return `<span class="badge b-serious">▲ warranty ends ${fmtDate(expiry)}</span>`;
+  return '';
+}
+
+function equipmentList(r, systemId) {
+  const items = r.equipment.filter((e) => e.system_id === systemId);
+  if (!items.length) return '';
+  return `<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--hairline-2)">
+    <div class="field-label" style="margin-bottom:4px">Equipment</div>
+    ${items.map((e) => `<div class="item-line small">
+      <div><b>${esc(e.name)}</b> ${warrantyBadge(e.warranty_status, e.warranty_expiry)}<br>
+        <span class="muted">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
+        ${e.remaining_life != null ? ` · ~${e.remaining_life} yrs left` : ''}
+        ${e.warranty_expiry && !e.warranty_status ? '' : ''}</span></div>
+      <span class="right"><button class="btn btn-sm" data-eq-edit="${e.id}">Edit</button></span>
+    </div>`).join('')}
+  </div>`;
+}
+
 function systemsTab(r) {
-  if (!r.systems.length) return `<div class="card">${empty('No systems logged yet — add the first one.')}</div>`;
+  const unattached = r.equipment.filter((e) => !e.system_id);
+  const equipmentFooter = `
+    <div style="margin:16px 0"><button class="btn" id="eq-add">+ Add equipment</button>
+      <span class="small muted" style="margin-left:8px">components with their own model/warranty story — attached to a system or freestanding</span></div>
+    ${unattached.length ? `<div class="card card-pad">
+      <h3>Freestanding equipment</h3>
+      ${unattached.map((e) => `<div class="item-line small">
+        <div><b>${esc(e.name)}</b> ${warrantyBadge(e.warranty_status, e.warranty_expiry)}<br>
+          <span class="muted">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
+          ${e.remaining_life != null ? ` · ~${e.remaining_life} yrs left` : ''}</span></div>
+        <span class="right"><button class="btn btn-sm" data-eq-edit="${e.id}">Edit</button></span>
+      </div>`).join('')}
+    </div>` : ''}`;
+  if (!r.systems.length) return `<div class="card">${empty('No systems logged yet — add the first one.')}</div>${equipmentFooter}`;
   return `<div class="grid g2">${r.systems.map((s) => `
     <div class="card card-pad" style="position:relative">
       <div style="display:flex;justify-content:space-between;gap:10px">
@@ -340,8 +387,9 @@ function systemsTab(r) {
         ${s.warranty_expiry ? `<dt>Warranty until</dt><dd>${fmtDate(s.warranty_expiry)}</dd>` : ''}
       </dl>
       ${s.advisor_notes ? `<div class="small muted" style="margin-top:8px"><b>Internal:</b> ${esc(s.advisor_notes)}</div>` : ''}
+      ${equipmentList(r, s.id)}
       <div style="margin-top:10px"><button class="btn btn-sm" data-edit-system="${s.id}">Edit</button></div>
-    </div>`).join('')}</div>`;
+    </div>`).join('')}</div>${equipmentFooter}`;
 }
 
 function scheduleTab(r) {
@@ -368,13 +416,16 @@ function scheduleTab(r) {
 
 function logTab(r) {
   if (!r.log.length) return `<div class="card">${empty('No work logged yet.')}</div>`;
+  const docsByLog = {};
+  for (const doc of r.documents) if (doc.maintenance_log_id) (docsByLog[doc.maintenance_log_id] ??= []).push(doc);
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Date</th><th>Work performed</th><th>System</th><th>Contractor</th><th class="num">Invoice</th></tr></thead>
+    <thead><tr><th>Date</th><th>Work performed</th><th>System / Equipment</th><th>Performed by</th><th class="num">Invoice</th></tr></thead>
     <tbody>${r.log.map((l) => `<tr>
       <td style="white-space:nowrap">${fmtDate(l.date)}</td>
-      <td>${esc(l.description)}${l.outcome_notes ? `<br><span class="small muted">${esc(l.outcome_notes)}</span>` : ''}</td>
-      <td>${esc(l.system_name || '—')}</td>
-      <td>${esc(l.contractor_name || '—')}${l.advisor_present ? '<br><span class="small muted">advisor present</span>' : ''}</td>
+      <td>${esc(l.description)}${l.outcome_notes ? `<br><span class="small muted">${esc(l.outcome_notes)}</span>` : ''}
+        ${(docsByLog[l.id] || []).map((doc) => `<br><a class="small" href="/api/documents/${doc.id}/file" target="_blank">📎 ${esc(doc.document_name)}</a>`).join('')}</td>
+      <td>${esc(l.system_name || '—')}${l.equipment_name ? `<br><span class="chip">${esc(l.equipment_name)}</span>` : ''}</td>
+      <td>${esc(l.contractor_name || l.performed_by || '—')}${l.advisor_present ? '<br><span class="small muted">advisor present</span>' : ''}</td>
       <td class="num">${money(l.invoice_amount)}${l.invoice_reference ? `<br><span class="small muted">${esc(l.invoice_reference)}</span>` : ''}</td>
     </tr>`).join('')}</tbody></table></div>`;
 }
@@ -411,19 +462,37 @@ function visitsTab(r) {
 }
 
 function documentsTab(r) {
+  const logLabel = (l) => `${fmtDate(l.date)} — ${l.description.slice(0, 60)}`;
   return `<div class="card card-pad">
-    <form id="doc-upload" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-      <input type="file" id="doc-file" class="control" style="max-width:280px">
-      <select id="doc-type" class="control" style="max-width:180px">
-        ${['photo','permit_doc','invoice','warranty','inspection_report','other'].map((t) => `<option>${t}</option>`).join('')}
-      </select>
+    <form id="doc-upload" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px">
+      <label class="field" style="margin:0"><span class="field-label">File</span>
+        <input type="file" id="doc-file" class="control" style="max-width:260px"></label>
+      <label class="field" style="margin:0"><span class="field-label">Type</span>
+        <select id="doc-type" class="control" style="max-width:150px">
+          ${['photo','permit_doc','invoice','warranty','inspection_report','other'].map((t) => `<option>${t}</option>`).join('')}
+        </select></label>
+      <label class="field" style="margin:0"><span class="field-label">System</span>
+        <select id="doc-system" class="control" style="max-width:170px"><option value="">—</option>
+          ${r.systems.map((s) => `<option value="${s.id}">${esc(s.system_name)}</option>`).join('')}
+        </select></label>
+      <label class="field" style="margin:0"><span class="field-label">Equipment</span>
+        <select id="doc-equipment" class="control" style="max-width:170px"><option value="">—</option>
+          ${r.equipment.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+        </select></label>
+      <label class="field" style="margin:0"><span class="field-label">Service entry</span>
+        <select id="doc-log" class="control" style="max-width:220px"><option value="">—</option>
+          ${r.log.slice(0, 20).map((l) => `<option value="${l.id}">${esc(logLabel(l))}</option>`).join('')}
+        </select></label>
       <button class="btn btn-primary btn-sm" type="submit">Upload</button>
     </form>
     ${r.documents.length ? r.documents.map((doc) => `
       <div class="item-line">
         <span class="chip">${label(doc.document_type)}</span>
-        <a href="/api/documents/${doc.id}/file" target="_blank"><b>${esc(doc.document_name)}</b></a>
-        <span class="small muted">${doc.description ? esc(doc.description) + ' · ' : ''}${fmtDate(doc.upload_date)} ${doc.uploaded_by_name ? '· ' + esc(doc.uploaded_by_name) : ''}</span>
+        <div><a href="/api/documents/${doc.id}/file" target="_blank"><b>${esc(doc.document_name)}</b></a>
+          ${doc.system_name ? `<span class="chip">${esc(doc.system_name)}</span>` : ''}
+          ${doc.equipment_name ? `<span class="chip">⚙ ${esc(doc.equipment_name)}</span>` : ''}
+          ${doc.maintenance_log_id ? `<span class="chip">service #${doc.maintenance_log_id}</span>` : ''}
+          <br><span class="small muted">${doc.description ? esc(doc.description) + ' · ' : ''}${fmtDate(doc.upload_date)} ${doc.uploaded_by_name ? '· ' + esc(doc.uploaded_by_name) : ''}</span></div>
         <span class="right small muted">${doc.size_bytes ? Math.ceil(doc.size_bytes / 1024) + ' KB' : ''}</span>
       </div>`).join('') : empty('No documents yet.')}
   </div>`;
@@ -457,6 +526,11 @@ function bindTabActions(name, r, view, id) {
         systemModal(id, s, rerender);
       });
     }
+    $('#eq-add', view)?.addEventListener('click', () => equipmentModal(r, null, rerender));
+    for (const b of $$('[data-eq-edit]', view)) {
+      b.addEventListener('click', () =>
+        equipmentModal(r, r.equipment.find((e) => e.id === Number(b.dataset.eqEdit)), rerender));
+    }
   }
   if (name === 'schedule') {
     for (const b of $$('[data-complete]', view)) {
@@ -479,6 +553,10 @@ function bindTabActions(name, r, view, id) {
       const file = fileEl.files[0];
       if (!file) return toast('Choose a file first', 'err');
       const q = new URLSearchParams({ property_id: id, name: file.name, type: $('#doc-type', view).value });
+      for (const [param, sel] of [['system_id', '#doc-system'], ['equipment_id', '#doc-equipment'], ['log_id', '#doc-log']]) {
+        const v = $(sel, view)?.value;
+        if (v) q.set(param, v);
+      }
       await fetch(`/api/documents?${q}`, { method: 'POST', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' } })
         .then(async (res) => { if (!res.ok) throw new Error((await res.json()).error); });
       toast('Document uploaded');
@@ -538,6 +616,53 @@ export function systemModal(propertyId, existing, done) {
   });
 }
 
+// ── Equipment modal (lifespan + warranty record-keeping) ──────────────────
+export function equipmentModal(r, existing, done) {
+  const m = modal(existing ? `Edit — ${existing.name}` : 'Add equipment', `
+    <p class="sub" style="margin-bottom:12px">Equipment tracks components with their own model, lifespan, and warranty —
+    optionally inside a system. Warranties surface as reminders; the maintenance engine keeps running on systems.</p>
+    <div class="form-grid">
+      ${field('name', 'Name', input(`value="${esc(existing?.name || '')}" placeholder="AC condenser, sump pump, range…"`))}
+      ${field('system_id', 'Part of system', select([{ value: '', label: '— freestanding —' },
+        ...r.systems.map((s) => ({ value: s.id, label: s.system_name, selected: existing?.system_id === s.id }))], 'data-number'))}
+      ${field('make', 'Make', input(`value="${esc(existing?.make || '')}"`))}
+      ${field('model_number', 'Model #', input(`value="${esc(existing?.model_number || '')}"`))}
+      ${field('serial_number', 'Serial #', input(`value="${esc(existing?.serial_number || '')}"`))}
+      ${field('install_date', 'Installed / purchased', input(`type="date" value="${existing?.install_date || ''}"`))}
+      ${field('expected_lifespan', 'Expected lifespan (yrs)', input(`type="number" step="0.5" value="${existing?.expected_lifespan ?? ''}" data-number`))}
+      ${field('warranty_expiry', 'Warranty expires', input(`type="date" value="${existing?.warranty_expiry || ''}"`))}
+      <div class="field"><span class="field-label">Condition</span>${starInput('condition_rating', existing?.condition_rating || 0)}</div>
+      <div class="span2">${field('description', 'Description', textarea(`rows="2"`))}</div>
+      <div class="span2">${field('advisor_notes', 'Advisor notes (internal)', textarea(`rows="2"`))}</div>
+    </div>
+    <div class="form-actions">
+      ${existing ? '<button class="btn btn-danger" id="eq-remove">Remove from record</button>' : ''}
+      <button class="btn btn-primary" id="eq-save">${existing ? 'Save changes' : 'Add equipment'}</button>
+    </div>`, { wide: true });
+  bindStarInputs(m.body);
+  if (existing) {
+    $('[name=description]', m.body).value = existing.description || '';
+    $('[name=advisor_notes]', m.body).value = existing.advisor_notes || '';
+  }
+  $('#eq-save', m.body).addEventListener('click', async () => {
+    const body = formValues(m.body);
+    body.condition_rating = readStars(m.body, 'condition_rating');
+    if (!body.name) return toast('Name the equipment', 'err');
+    try {
+      if (existing) await api(`/api/equipment/${existing.id}`, { method: 'PATCH', body });
+      else await api('/api/equipment', { method: 'POST', body: { ...body, property_id: r.property.id } });
+      toast('Equipment saved');
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  $('#eq-remove', m.body)?.addEventListener('click', async () => {
+    if (!confirm(`Remove "${existing.name}" from the record? Its history and documents stay linked.`)) return;
+    await api(`/api/equipment/${existing.id}`, { method: 'PATCH', body: { active: 0 } });
+    toast('Equipment removed');
+    m.close(); done();
+  });
+}
+
 // ── Job completion modal (US-A11 + US-A12) ────────────────────────────────
 export async function jobModal(r, forwardItem, done) {
   const contractors = await api('/api/contractors');
@@ -548,13 +673,18 @@ export async function jobModal(r, forwardItem, done) {
       ${field('date', 'Work date', input(`type="date" value="${new Date().toISOString().slice(0, 10)}"`))}
       ${field('system_id', 'System', select([{ value: '', label: '— none —' },
         ...r.systems.map((s) => ({ value: s.id, label: s.system_name, selected: forwardItem?.system_id === s.id }))], 'data-number'))}
+      ${field('equipment_id', 'Equipment (optional)', select([{ value: '', label: '— none —' },
+        ...r.equipment.map((e) => ({ value: e.id, label: e.name }))], 'data-number'))}
       ${field('contractor_id', 'Contractor (referable only)', select([{ value: '', label: '— none / client arranged —' },
         ...referable.map((c) => ({ value: c.id, label: `${c.company_name} (${c.trades.join(', ')})`, selected: forwardItem?.assigned_contractor_id === c.id }))], 'data-number'))}
+      ${field('performed_by', 'Performed by (if not a network contractor)', input(`placeholder="Homeowner, ACME Appliance…"`))}
       ${field('invoice_amount', 'Invoice amount ($)', input(`type="number" step="0.01" data-number`))}
       ${field('invoice_reference', 'Invoice #', input())}
       <label class="checkbox-row"><input type="checkbox" name="advisor_present"> Advisor present</label>
       <div class="span2">${field('description', 'What was done, specifically', textarea(`rows="3"`))}</div>
       <div class="span2">${field('outcome_notes', 'Outcome notes', textarea(`rows="2"`))}</div>
+      <div class="span2"><label class="field"><span class="field-label">Attach invoice / photo (optional)</span>
+        <input type="file" id="job-doc" class="control"></label></div>
     </div>
     ${contractors.length !== referable.length ? `<div class="small muted">${contractors.length - referable.length} network contractor(s) hidden — missing current license or insurance (never refer without both).</div>` : ''}
     <div class="form-actions"><button class="btn btn-primary" id="job-save">Log job${forwardItem ? ' & close item' : ''}</button></div>`,
@@ -565,9 +695,20 @@ export async function jobModal(r, forwardItem, done) {
     if (forwardItem) body.forward_item_id = forwardItem.id;
     body.property_id = r.property.id;
     try {
+      const file = $('#job-doc', m.body)?.files[0];
       const res = await api('/api/maintenance-log', { method: 'POST', body });
+      if (file) {
+        const q = new URLSearchParams({
+          property_id: r.property.id, name: file.name, type: 'invoice', log_id: res.log.id,
+          ...(body.system_id ? { system_id: body.system_id } : {}),
+          ...(body.equipment_id ? { equipment_id: body.equipment_id } : {}),
+        });
+        await fetch(`/api/documents?${q}`, { method: 'POST', body: file,
+          headers: { 'Content-Type': file.type || 'application/octet-stream' } });
+      }
       m.close();
       let msg = 'Job logged';
+      if (file) msg += ' · document attached';
       if (res.closed_forward_item) msg += ' · schedule item closed';
       if (res.referral_fee_created) msg += ' · referral fee recorded';
       if (res.next_items_generated) msg += ` · ${res.next_items_generated} next item(s) scheduled`;

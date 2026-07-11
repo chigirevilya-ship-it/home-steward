@@ -11,12 +11,29 @@ const FILES_DIR = path.join(DATA_DIR, 'files');
 
 let db = null;
 
+// In-place migrations for databases created before a column existed.
+// CREATE TABLE IF NOT EXISTS covers new tables; this covers new columns.
+function ensureColumn(handle, table, column, ddl) {
+  const cols = handle.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    handle.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    console.log(`[migrate] added ${table}.${column}`);
+  }
+}
+
+function migrate(handle) {
+  ensureColumn(handle, 'documents', 'equipment_id', 'equipment_id INTEGER REFERENCES equipment(id)');
+  ensureColumn(handle, 'maintenance_log', 'equipment_id', 'equipment_id INTEGER REFERENCES equipment(id)');
+  ensureColumn(handle, 'maintenance_log', 'performed_by', 'performed_by TEXT');
+}
+
 function open() {
   if (db) return db;
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(FILES_DIR, { recursive: true });
   db = new DatabaseSync(DB_PATH);
   db.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  migrate(db);
   return db;
 }
 

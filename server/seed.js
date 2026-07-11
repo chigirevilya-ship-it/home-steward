@@ -135,9 +135,9 @@ function seed({ reset = false } = {}) {
   mkSys.run('Chimney (2 flues)', pWhit, 'Chimney / Fireplace',
     'Two brick flues: boiler + living room fireplace. Relined 2009.', yearsAgo(17), null, 50, 4,
     null, null, null, rel(-620), 0, null);
-  mkSys.run('Kitchen appliances', pWhit, 'Appliances',
+  const sWhitAppl = mkSys.run('Kitchen appliances', pWhit, 'Appliances',
     'Sub-Zero 48" fridge (2019), Wolf range (2019), Bosch dishwasher (2021).', yearsAgo(7), null, 15, 4,
-    'BI-48SD', null, rel(120), null, 0, null);
+    'BI-48SD', null, rel(120), null, 0, null).lastInsertRowid;
 
   // O'Brien — triple-decker
   const sObrFurn = mkSys.run('Gas furnace (unit 1)', pObr, 'HVAC - Heating',
@@ -194,9 +194,9 @@ function seed({ reset = false } = {}) {
     null, null, null, rel(-235), 0, null);
 
   // Alvarez — 1962 mid-century
-  mkSys.run('Central HVAC (heat + AC)', pAlv, 'HVAC - Cooling',
+  const sAlvAC = mkSys.run('Central HVAC (heat + AC)', pAlv, 'HVAC - Cooling',
     'Lennox XC20 condenser + matching air handler, attic ducts resealed 2018.', yearsAgo(8), null, 16, 4,
-    'XC20-036', null, rel(365), rel(-90), 0, null);
+    'XC20-036', null, rel(365), rel(-90), 0, null).lastInsertRowid;
   mkSys.run('Gas furnace', pAlv, 'HVAC - Heating',
     'Lennox EL296V two-stage, closet install.', yearsAgo(8), null, 20, 4,
     'EL296UH070', null, rel(365), rel(-90), 0, null);
@@ -212,6 +212,24 @@ function seed({ reset = false } = {}) {
   mkSys.run('Pool equipment', pAlv, 'Other',
     'Pentair VS pump (2021) + cartridge filter. Serviced monthly by pool co.', yearsAgo(5), null, 12, 4,
     'P6E6VS4H-209L', null, null, rel(-35), 0, null);
+
+  // ── Equipment (components with their own lifespan/warranty story) ──────
+  const mkEquip = ins(`INSERT INTO equipment
+    (property_id, system_id, name, description, make, model_number, serial_number,
+     install_date, expected_lifespan, warranty_expiry, condition_rating, advisor_notes, active)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)`);
+  const eqWolf = mkEquip.run(pWhit, sWhitAppl, 'Wolf 48" range', 'Six burner + griddle, dual ovens.', 'Wolf', 'DF486G', 'WF-99120',
+    yearsAgo(7), 20, rel(45), 4, 'Extended warranty expires soon — remind Sarah before renewal window closes.').lastInsertRowid;
+  mkEquip.run(pWhit, sWhitAppl, 'Sub-Zero 48" refrigerator', 'Built-in, dual compressor.', 'Sub-Zero', 'BI-48SD', 'SZ-44107',
+    yearsAgo(7), 19, rel(120), 4, null);
+  mkEquip.run(pWhit, sWhitBoiler, 'Boiler low-water cutoff', 'Probe-type LWCO, replaced with boiler service.', 'McDonnell & Miller', 'PS-801', null,
+    yearsAgo(2), 10, rel(300), 5, null);
+  mkEquip.run(pAlv, sAlvAC, 'AC condenser', 'Variable-capacity outdoor unit.', 'Lennox', 'XC20-036-230', 'LX-77451',
+    yearsAgo(8), 16, rel(730), 4, null);
+  mkEquip.run(pAlv, sAlvAC, 'Air handler', 'Matching variable-speed air handler, attic.', 'Lennox', 'CBA38MV', 'LX-77452',
+    yearsAgo(8), 16, rel(730), 4, null);
+  mkEquip.run(pAlv, null, 'Pool robot cleaner', 'Freestanding — client-owned, not tied to a documented system.', 'Dolphin', 'M600', null,
+    yearsAgo(2), 5, rel(-30), 3, 'Warranty already lapsed; note replacement cost at next quarterly.');
 
   // ── Permit History ─────────────────────────────────────────────────────
   const mkPermit = ins(`INSERT INTO permits
@@ -486,11 +504,13 @@ function seed({ reset = false } = {}) {
     'Battery units, replaced last year.', yearsAgo(1), null, 10, 5,
     null, null, null, null, 0, null);
   mkSub.run(taylor, rel(-60), rel(305), 'self_serve', 129, 'payments bypassed (demo)', rel(-60), 'Card', 'paid');
+  mkEquip.run(pTaylor, null, 'Portable generator', 'Kept in garage for outages; self-entered.', 'Honda', 'EU2200i', null,
+    yearsAgo(3), 12, rel(200), 4, null);
 
   // ── Documents (small real files so download works out of the box) ─────
   const mkDoc = ins(`INSERT INTO documents
-    (document_name, document_type, file_path, mime_type, size_bytes, property_id, system_id, maintenance_log_id, permit_id, description, upload_date, uploaded_by_user, uploaded_by_client)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    (document_name, document_type, file_path, mime_type, size_bytes, property_id, system_id, equipment_id, maintenance_log_id, permit_id, description, upload_date, uploaded_by_user, uploaded_by_client)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const writeDemoFile = (name, content) => {
     const p = path.join(FILES_DIR, name);
     fs.writeFileSync(p, content);
@@ -498,16 +518,20 @@ function seed({ reset = false } = {}) {
   };
   let f = writeDemoFile('whitfield-boiler-service-invoice.txt',
     'Hearthside Mechanical — Invoice HM-8841\nAnnual steam boiler service, 47 Sumner Hill Rd\nTotal: $385.00\n');
-  mkDoc.run('Boiler service invoice (Hearthside)', 'invoice', f.rel, 'text/plain', f.size, pWhit, sWhitBoiler, null, null,
+  mkDoc.run('Boiler service invoice (Hearthside)', 'invoice', f.rel, 'text/plain', f.size, pWhit, sWhitBoiler, null, null, null,
     'Annual steam service invoice.', rel(-427), smeBos, null);
   f = writeDemoFile('whitfield-intake-summary.txt',
     'Steward Intake Summary — 47 Sumner Hill Rd, Jamaica Plain\n7 systems logged; 3 permits researched; 1 gap flag.\n\nThis assessment is an advisory walkthrough, not a licensed home inspection.\n');
-  mkDoc.run('Intake summary', 'inspection_report', f.rel, 'text/plain', f.size, pWhit, null, null, null,
+  mkDoc.run('Intake summary', 'inspection_report', f.rel, 'text/plain', f.size, pWhit, null, null, null, null,
     'Client-facing intake debrief document.', rel(-414), smeBos, null);
   f = writeDemoFile('hassan-strap-photo-note.txt',
     '[Photo placeholder] Water heater seismic straps after re-tensioning, garage, 5214 Range View Ave.\n');
-  mkDoc.run('Seismic straps — after photo', 'photo', f.rel, 'text/plain', f.size, pHas, sHasWH, null, null,
+  mkDoc.run('Seismic straps — after photo', 'photo', f.rel, 'text/plain', f.size, pHas, sHasWH, null, null, null,
     'Straps re-tensioned at intake.', rel(-450), smeLa, null);
+  f = writeDemoFile('whitfield-wolf-range-warranty.txt',
+    'Wolf Extended Warranty Certificate\nModel DF486G, Serial WF-99120\nCoverage: parts and labor.\n');
+  mkDoc.run('Wolf range — extended warranty', 'warranty', f.rel, 'text/plain', f.size, pWhit, sWhitAppl, eqWolf, null, null,
+    'Extended warranty certificate for the Wolf range.', rel(-400), smeBos, null);
 
   // ── Client request (portal) ────────────────────────────────────────────
   ins(`INSERT INTO client_requests (client_id, property_id, created_at, subject, body, status) VALUES (?,?,?,?,?,?)`)

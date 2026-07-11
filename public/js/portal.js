@@ -113,6 +113,90 @@ function selfSystemModal(r, existing, done) {
   });
 }
 
+function warrantyBadge(status, expiry) {
+  if (status === 'expired') return `<span class="badge b-critical">■ warranty expired</span>`;
+  if (status === 'expiring') return `<span class="badge b-serious">▲ warranty ends ${fmtDate(expiry)}</span>`;
+  return '';
+}
+
+// Equipment modal — homeowner edition (no internal notes).
+function selfEquipmentModal(r, existing, done) {
+  const m = modal(existing ? `Edit — ${existing.name}` : 'Add equipment', `
+    <p class="sub" style="margin-bottom:12px">Track anything with its own model and warranty — parts of a system
+    (a condenser inside your AC) or freestanding (a generator, a mower).</p>
+    <div class="form-grid">
+      ${field('name', 'Name', input(`value="${esc(existing?.name || '')}" placeholder="AC condenser, generator…"`))}
+      ${field('system_id', 'Part of system', select([{ value: '', label: '— freestanding —' },
+        ...r.systems.map((s) => ({ value: s.id, label: s.system_name, selected: existing?.system_id === s.id }))], 'data-number'))}
+      ${field('make', 'Make', input(`value="${esc(existing?.make || '')}"`))}
+      ${field('model_number', 'Model #', input(`value="${esc(existing?.model_number || '')}"`))}
+      ${field('serial_number', 'Serial #', input(`value="${esc(existing?.serial_number || '')}"`))}
+      ${field('install_date', 'Installed / purchased', input(`type="date" value="${existing?.install_date || ''}"`))}
+      ${field('expected_lifespan', 'Expected lifespan (yrs)', input(`type="number" step="0.5" value="${existing?.expected_lifespan ?? ''}" data-number`))}
+      ${field('warranty_expiry', 'Warranty expires', input(`type="date" value="${existing?.warranty_expiry || ''}"`))}
+      <div class="field"><span class="field-label">Condition</span>${starInput('condition_rating', existing?.condition_rating || 0)}</div>
+      <div class="span2">${field('description', 'Notes', textarea(`rows="2"`))}</div>
+    </div>
+    <div class="form-actions"><button class="btn btn-primary" id="pe-save">${existing ? 'Save changes' : 'Add equipment'}</button></div>`,
+    { wide: true });
+  bindStarInputs(m.body);
+  if (existing) $('[name=description]', m.body).value = existing.description || '';
+  $('#pe-save', m.body).addEventListener('click', async () => {
+    const body = formValues(m.body);
+    body.condition_rating = readStars(m.body, 'condition_rating');
+    if (!body.name) return toast('Name the equipment', 'err');
+    try {
+      if (existing) await api(`/api/portal/equipment/${existing.id}`, { method: 'PATCH', body });
+      else await api('/api/portal/equipment', { method: 'POST', body });
+      invalidate();
+      toast('Equipment saved');
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+}
+
+// Service log modal — used for ad-hoc "Log service" and per-item "Mark done".
+function serviceModal(r, forwardItem, done) {
+  const m = modal(forwardItem ? `Mark done — ${forwardItem.item_name}` : 'Log service', `
+    ${forwardItem ? '<div class="notice">This closes the task and schedules the next occurrence automatically.</div>' : ''}
+    <div class="form-grid">
+      ${field('date', 'Work date', input(`type="date" value="${new Date().toISOString().slice(0, 10)}"`))}
+      ${field('performed_by', 'Who did the work', input(`placeholder="Me, ACME Plumbing…"`))}
+      ${field('system_id', 'System', select([{ value: '', label: '— none —' },
+        ...r.systems.map((s) => ({ value: s.id, label: s.system_name, selected: forwardItem?.system_id === s.id }))], 'data-number'))}
+      ${field('equipment_id', 'Equipment', select([{ value: '', label: '— none —' },
+        ...r.equipment.map((e) => ({ value: e.id, label: e.name }))], 'data-number'))}
+      ${field('invoice_amount', 'Cost ($, optional)', input(`type="number" step="0.01" data-number`))}
+      <div class="span2">${field('description', 'What was done', textarea(`rows="3"`))}</div>
+      <div class="span2"><label class="field"><span class="field-label">Attach receipt / photo (optional)</span>
+        <input type="file" id="svc-doc" class="control"></label></div>
+    </div>
+    <div class="form-actions"><button class="btn btn-primary" id="svc-save">${forwardItem ? 'Mark done' : 'Log service'}</button></div>`,
+    { wide: true });
+  $('#svc-save', m.body).addEventListener('click', async () => {
+    const body = formValues(m.body);
+    if (!body.description) return toast('Describe the work', 'err');
+    if (forwardItem) body.forward_item_id = forwardItem.id;
+    try {
+      const file = $('#svc-doc', m.body)?.files[0];
+      const res = await api('/api/portal/service', { method: 'POST', body });
+      if (file) {
+        const q = new URLSearchParams({ name: file.name, type: 'invoice', log_id: res.log_id,
+          ...(body.system_id ? { system_id: body.system_id } : {}),
+          ...(body.equipment_id ? { equipment_id: body.equipment_id } : {}) });
+        await fetch(`/api/portal/documents?${q}`, { method: 'POST', body: file,
+          headers: { 'Content-Type': file.type || 'application/octet-stream' } });
+      }
+      invalidate();
+      let msg = 'Service logged';
+      if (res.closed_forward_item) msg += ' · task closed';
+      if (res.next_items_generated) msg += ` · next occurrence scheduled`;
+      toast(msg);
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+}
+
 async function sendUpgradeRequest() {
   await api('/api/portal/requests', { method: 'POST', body: {
     subject: 'Upgrade request: Self-Serve → Guided',
@@ -180,6 +264,11 @@ export async function renderOverview(view) {
   <div class="notice section">Your Home Record has no systems yet — <a href="#/systems">add your furnace, water
   heater, and roof</a> and the maintenance engine will build your schedule.</div>` : ''}
 
+  ${r.warranty_flags?.length ? `
+  <div class="notice section">▲ <b>Warranty attention:</b> ${r.warranty_flags.map((w) =>
+    `${esc(w.name)} (${w.status === 'expired' ? 'expired' : 'ends ' + fmtDate(w.warranty_expiry)})`).join(' · ')}
+    — <a href="#/systems">see equipment</a></div>` : ''}
+
   <div class="section"><div class="section-head"><h2>Coming up in the next 12 months</h2>
     <a class="small" href="#/calendar">full calendar →</a></div>
     <div class="card card-pad">
@@ -211,15 +300,23 @@ async function loadRequests(view) {
       <span class="right muted">${fmtDate(r.created_at.slice(0, 10))}</span></div>`).join('') : '';
 }
 
-function itemLine(i) {
+function itemLine(i, selfServe = false) {
   return `<div class="item-line" style="align-items:flex-start">
     ${priorityBadge(i.priority, i.overdue)}
     <div><b>${esc(i.item_name)}</b>${i.system_name ? ` <span class="small muted">· ${esc(i.system_name)}</span>` : ''}
       ${i.deferral_risk ? `<br><span class="small muted">${esc(i.deferral_risk)}</span>` : ''}
       ${i.contractor_name ? `<br><span class="small muted">Assigned: ${esc(i.contractor_name)}</span>` : ''}</div>
     <span class="right" style="white-space:nowrap"><b>${dueText(i.due_date)}</b><br>
-      <span class="small muted">${moneyRange(i.est_cost_low, i.est_cost_high)}</span></span>
+      <span class="small muted">${moneyRange(i.est_cost_low, i.est_cost_high)}</span>
+      ${selfServe ? `<br><button class="btn btn-sm" data-done="${i.id}" style="margin-top:4px">Mark done</button>` : ''}</span>
   </div>`;
+}
+
+function bindMarkDone(view, r, refresh) {
+  for (const b of $$('[data-done]', view)) {
+    b.addEventListener('click', () =>
+      serviceModal(r, r.schedule.find((i) => i.id === Number(b.dataset.done)), refresh));
+  }
 }
 
 // ── Calendar (US-C1: 12-month forward view) ────────────────────────────────
@@ -236,17 +333,19 @@ export async function renderCalendar(view) {
   const within = r.schedule.filter((i) => i.due_date && i.due_date <= horizon);
   const overdue = within.filter((i) => i.overdue);
 
+  const line = (i) => itemLine(i, r.self_serve);
   view.innerHTML = `
   ${head(r, 'Maintenance Calendar', `${within.length} items over the next 12 months`)}
   ${overdue.length ? `<div class="section"><div class="section-head"><h2>Past due</h2></div>
-    <div class="card card-pad">${overdue.map(itemLine).join('')}</div></div>` : ''}
+    <div class="card card-pad">${overdue.map(line).join('')}</div></div>` : ''}
   ${months.map((ym) => {
     const items = within.filter((i) => !i.overdue && i.due_date.slice(0, 7) === ym);
     if (!items.length) return '';
     return `<div class="section cal-month"><h3 class="serif">${fmtMonth(ym)}</h3>
-      <div class="card card-pad">${items.map(itemLine).join('')}</div></div>`;
+      <div class="card card-pad">${items.map(line).join('')}</div></div>`;
   }).join('') || `<div class="card section">${empty('Nothing scheduled in the next 12 months.')}</div>`}
   <div class="disclaimer">${esc(r.disclaimer)}</div>`;
+  bindMarkDone(view, r, () => renderCalendar(view));
 }
 
 // ── Systems (US-C1: inventory cards with age bars) ─────────────────────────
@@ -257,9 +356,14 @@ export async function renderSystems(view) {
   ${head(r, 'Systems Inventory', r.self_serve
     ? `${r.systems.length} systems — you maintain this inventory; the engine schedules from it`
     : `${r.systems.length} systems on record, sorted by remaining life`)}
-  ${r.self_serve ? `<div style="margin-bottom:16px"><button class="btn btn-primary" id="ss-add">+ Add a system</button></div>` : ''}
+  ${r.self_serve ? `<div style="margin-bottom:16px">
+    <button class="btn btn-primary" id="ss-add">+ Add a system</button>
+    <button class="btn" id="pe-add">+ Add equipment</button>
+  </div>` : ''}
   <div class="grid g2">
-    ${r.systems.map((s) => `
+    ${r.systems.map((s) => {
+      const equip = r.equipment.filter((e) => e.system_id === s.id);
+      return `
     <div class="card card-pad">
       <div style="display:flex;justify-content:space-between;gap:8px">
         <div><h3>${esc(s.system_name)}</h3><span class="chip">${esc(s.category)}</span></div>
@@ -275,16 +379,43 @@ export async function renderSystems(view) {
         ${s.warranty_expiry ? `<dt>Warranty until</dt><dd>${fmtDate(s.warranty_expiry)}</dd>` : ''}
         ${s.model_number ? `<dt>Model</dt><dd>${esc(s.model_number)}</dd>` : ''}
       </dl>
+      ${equip.length ? `<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--hairline-2)">
+        <div class="field-label" style="margin-bottom:4px">Equipment</div>
+        ${equip.map((e) => `<div class="item-line small">
+          <div><b>${esc(e.name)}</b> ${warrantyBadge(e.warranty_status, e.warranty_expiry)}<br>
+            <span class="muted">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
+            ${e.warranty_expiry && e.warranty_status === 'active' ? ` · warranty to ${fmtDate(e.warranty_expiry)}` : ''}</span></div>
+          ${r.self_serve ? `<span class="right"><button class="btn btn-sm" data-pe-edit="${e.id}">Edit</button></span>` : ''}
+        </div>`).join('')}
+      </div>` : ''}
       ${r.self_serve ? `<div style="margin-top:10px"><button class="btn btn-sm" data-ss-edit="${s.id}">Edit</button></div>` : ''}
-    </div>`).join('') || `<div class="card">${empty('No systems yet — add the first one.')}</div>`}
-  </div>`;
+    </div>`; }).join('') || `<div class="card">${empty('No systems yet — add the first one.')}</div>`}
+  </div>
+  ${(() => {
+    const freestanding = r.equipment.filter((e) => !e.system_id);
+    return freestanding.length ? `
+    <div class="card card-pad section">
+      <h3>Freestanding equipment</h3>
+      ${freestanding.map((e) => `<div class="item-line small">
+        <div><b>${esc(e.name)}</b> ${warrantyBadge(e.warranty_status, e.warranty_expiry)}<br>
+          <span class="muted">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
+          ${e.warranty_expiry && e.warranty_status === 'active' ? ` · warranty to ${fmtDate(e.warranty_expiry)}` : ''}</span></div>
+        ${r.self_serve ? `<span class="right"><button class="btn btn-sm" data-pe-edit="${e.id}">Edit</button></span>` : ''}
+      </div>`).join('')}
+    </div>` : '';
+  })()}`;
 
   if (r.self_serve) {
     const refresh = () => renderSystems(view);
     $('#ss-add', view).addEventListener('click', () => selfSystemModal(r, null, refresh));
+    $('#pe-add', view).addEventListener('click', () => selfEquipmentModal(r, null, refresh));
     for (const b of $$('[data-ss-edit]', view)) {
       b.addEventListener('click', () =>
         selfSystemModal(r, r.systems.find((s) => s.id === Number(b.dataset.ssEdit)), refresh));
+    }
+    for (const b of $$('[data-pe-edit]', view)) {
+      b.addEventListener('click', () =>
+        selfEquipmentModal(r, r.equipment.find((e) => e.id === Number(b.dataset.peEdit)), refresh));
     }
   }
 }
@@ -294,16 +425,20 @@ export async function renderHistory(view) {
   const r = await record();
   if (needsOnboarding(r)) return renderOnboarding(view, r);
   const total = r.log.reduce((sum, l) => sum + (l.invoice_amount || 0), 0);
+  const docsByLog = {};
+  for (const doc of r.documents) if (doc.maintenance_log_id) (docsByLog[doc.maintenance_log_id] ??= []).push(doc);
   view.innerHTML = `
   ${head(r, 'Maintenance History', `${r.log.length} jobs on record · ${money(total)} total invested`)}
+  ${r.self_serve ? `<div style="margin-bottom:16px"><button class="btn btn-primary" id="svc-add">+ Log service</button></div>` : ''}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Date</th><th>Work performed</th><th>System</th><th>Contractor</th><th class="num">Cost</th></tr></thead>
+      <thead><tr><th>Date</th><th>Work performed</th><th>System / Equipment</th><th>Performed by</th><th class="num">Cost</th></tr></thead>
       <tbody>${r.log.map((l) => `<tr>
         <td style="white-space:nowrap">${fmtDate(l.date)}</td>
-        <td>${esc(l.description)}${l.outcome_notes ? `<br><span class="small muted">${esc(l.outcome_notes)}</span>` : ''}</td>
-        <td>${esc(l.system_name || '—')}</td>
-        <td>${esc(l.contractor_name || '—')}</td>
+        <td>${esc(l.description)}${l.outcome_notes ? `<br><span class="small muted">${esc(l.outcome_notes)}</span>` : ''}
+          ${(docsByLog[l.id] || []).map((doc) => `<br><a class="small" href="/api/documents/${doc.id}/file" target="_blank">📎 ${esc(doc.document_name)}</a>`).join('')}</td>
+        <td>${esc(l.system_name || '—')}${l.equipment_name ? `<br><span class="chip">${esc(l.equipment_name)}</span>` : ''}</td>
+        <td>${esc(l.contractor_name || l.performed_by || '—')}</td>
         <td class="num">${money(l.invoice_amount)}</td>
       </tr>`).join('') || `<tr><td colspan="5">${empty('No work logged yet.')}</td></tr>`}</tbody>
     </table>
@@ -317,6 +452,8 @@ export async function renderHistory(view) {
       <td>${label(pm.permit_type)}</td><td>${fmtDate(pm.date_filed)}</td><td>${statusBadge(pm.status)}</td>
       <td>${esc(pm.scope_description || '')}${pm.gap_notes ? `<br><span class="small muted">${esc(pm.gap_notes)}</span>` : ''}</td>
     </tr>`).join('')}</tbody></table></div></div>` : ''}`;
+
+  $('#svc-add', view)?.addEventListener('click', () => serviceModal(r, null, () => renderHistory(view)));
 }
 
 // ── Capital forecast (US-C3, tier-gated) ───────────────────────────────────
@@ -386,12 +523,23 @@ export async function renderDocuments(view) {
   ${head(r, 'Documents', 'Everything about your house, in one place — and it’s yours to take')}
   <div class="card card-pad" style="margin-bottom:16px">
     <h3>Add to your Home Record</h3>
-    <form id="up-form" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
-      <input type="file" id="up-file" class="control" style="max-width:280px">
-      <select id="up-type" class="control" style="max-width:170px">
-        ${['photo', 'invoice', 'warranty', 'permit_doc', 'inspection_report', 'other'].map((t) => `<option>${t}</option>`).join('')}
-      </select>
-      <input id="up-desc" class="control" placeholder="Description (optional)" style="max-width:240px">
+    <form id="up-form" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px">
+      <label class="field" style="margin:0"><span class="field-label">File</span>
+        <input type="file" id="up-file" class="control" style="max-width:250px"></label>
+      <label class="field" style="margin:0"><span class="field-label">Type</span>
+        <select id="up-type" class="control" style="max-width:150px">
+          ${['photo', 'invoice', 'warranty', 'permit_doc', 'inspection_report', 'other'].map((t) => `<option>${t}</option>`).join('')}
+        </select></label>
+      <label class="field" style="margin:0"><span class="field-label">System</span>
+        <select id="up-system" class="control" style="max-width:170px"><option value="">—</option>
+          ${r.systems.map((s) => `<option value="${s.id}">${esc(s.system_name)}</option>`).join('')}
+        </select></label>
+      <label class="field" style="margin:0"><span class="field-label">Equipment</span>
+        <select id="up-equipment" class="control" style="max-width:170px"><option value="">—</option>
+          ${r.equipment.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+        </select></label>
+      <label class="field" style="margin:0"><span class="field-label">Description</span>
+        <input id="up-desc" class="control" placeholder="optional" style="max-width:200px"></label>
       <button class="btn btn-primary btn-sm" type="submit">Upload</button>
     </form>
   </div>
@@ -399,8 +547,10 @@ export async function renderDocuments(view) {
     ${r.documents.length ? r.documents.map((doc) => `
       <div class="item-line">
         <span class="chip">${label(doc.document_type)}</span>
-        <a href="/api/documents/${doc.id}/file" target="_blank"><b>${esc(doc.document_name)}</b></a>
-        <span class="small muted">${doc.description ? esc(doc.description) + ' · ' : ''}${fmtDate(doc.upload_date)}</span>
+        <div><a href="/api/documents/${doc.id}/file" target="_blank"><b>${esc(doc.document_name)}</b></a>
+          ${doc.system_name ? `<span class="chip">${esc(doc.system_name)}</span>` : ''}
+          ${doc.equipment_name ? `<span class="chip">⚙ ${esc(doc.equipment_name)}</span>` : ''}
+          <br><span class="small muted">${doc.description ? esc(doc.description) + ' · ' : ''}${fmtDate(doc.upload_date)}</span></div>
         <span class="right small muted">${doc.size_bytes ? Math.ceil(doc.size_bytes / 1024) + ' KB' : ''}</span>
       </div>`).join('') : empty('No documents yet — upload the first one.')}
   </div>
@@ -419,6 +569,10 @@ export async function renderDocuments(view) {
       name: file.name, type: $('#up-type', view).value,
       description: $('#up-desc', view).value, property_id: r.property.id,
     });
+    for (const [param, sel] of [['system_id', '#up-system'], ['equipment_id', '#up-equipment']]) {
+      const v = $(sel, view)?.value;
+      if (v) q.set(param, v);
+    }
     const res = await fetch(`/api/portal/documents?${q}`, {
       method: 'POST', body: file,
       headers: { 'Content-Type': file.type || 'application/octet-stream' },

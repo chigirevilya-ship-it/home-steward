@@ -207,10 +207,11 @@ async function handleStaffUpload(req, res, session, query) {
   const fileName = `${Date.now()}-u${staff.id}-${name}`;
   fs.writeFileSync(path.join(FILES_DIR, fileName), buf);
   const id = db.prepare(
-    `INSERT INTO documents (document_name, document_type, file_path, mime_type, size_bytes, property_id, system_id, maintenance_log_id, permit_id, description, upload_date, uploaded_by_user)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO documents (document_name, document_type, file_path, mime_type, size_bytes, property_id, system_id, equipment_id, maintenance_log_id, permit_id, description, upload_date, uploaded_by_user)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(name, query.get('type') || 'other', fileName, req.headers['content-type'] || 'application/octet-stream',
-    buf.length, propertyId, Number(query.get('system_id')) || null, Number(query.get('log_id')) || null,
+    buf.length, propertyId, Number(query.get('system_id')) || null, Number(query.get('equipment_id')) || null,
+    Number(query.get('log_id')) || null,
     Number(query.get('permit_id')) || null, query.get('description') || null, today(), staff.id).lastInsertRowid;
   audit('staff', staff.id, 'create', 'documents', id, name);
   sendJson(res, 201, db.prepare('SELECT * FROM documents WHERE id = ?').get(id));

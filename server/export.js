@@ -104,6 +104,24 @@ function renderHomeRecord(client, property) {
   </table>
 </section>
 
+${r.equipment.length ? `
+<section>
+  <h2><span class="n">02b</span>Equipment & Warranties <span class="muted" style="font-size:13px">(${r.equipment.length} items)</span></h2>
+  <table>
+    <thead><tr><th>Equipment</th><th>Part of</th><th>Make / Model</th><th>Installed</th><th>Condition</th><th>Warranty</th></tr></thead>
+    <tbody>
+    ${r.equipment.map((e) => `<tr>
+      <td><strong>${esc(e.name)}</strong>${e.description ? `<br><span class="muted">${esc(e.description)}</span>` : ''}</td>
+      <td>${esc(e.system_name || 'freestanding')}</td>
+      <td>${esc([e.make, e.model_number].filter(Boolean).join(' '))}${e.serial_number ? `<br><span class="muted">S/N ${esc(e.serial_number)}</span>` : ''}</td>
+      <td>${fmtDate(e.install_date)}</td>
+      <td>${stars(e.condition_rating)}</td>
+      <td>${e.warranty_expiry ? `${fmtDate(e.warranty_expiry)} ${e.warranty_status === 'expired' ? '<span class="badge gap">expired</span>' : e.warranty_status === 'expiring' ? '<span class="badge overdue">ending soon</span>' : ''}` : '—'}</td>
+    </tr>`).join('')}
+    </tbody>
+  </table>
+</section>` : ''}
+
 <section>
   <h2><span class="n">03</span>Forward Maintenance Schedule <span class="muted" style="font-size:13px">(${openItems.length} open items)</span></h2>
   <table>
@@ -141,8 +159,8 @@ ${r.forecast_eligible && r.forecast?.length ? `
     <tbody>
     ${r.log.map((l) => `<tr>
       <td style="white-space:nowrap">${fmtDate(l.date)}</td>
-      <td>${esc(l.description)}${l.outcome_notes ? `<br><span class="muted">${esc(l.outcome_notes)}</span>` : ''}</td>
-      <td>${esc(l.contractor_name || '—')}</td>
+      <td>${esc(l.description)}${l.equipment_name ? ` <span class="muted">(${esc(l.equipment_name)})</span>` : ''}${l.outcome_notes ? `<br><span class="muted">${esc(l.outcome_notes)}</span>` : ''}</td>
+      <td>${esc(l.contractor_name || l.performed_by || '—')}</td>
       <td>${money(l.invoice_amount)}</td>
     </tr>`).join('') || '<tr><td colspan="4" class="muted">No logged work yet.</td></tr>'}
     </tbody>

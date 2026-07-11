@@ -6,6 +6,7 @@
 //   - rules are deactivated, never deleted
 
 const { open, audit, today } = require('./db');
+const { hashPassword } = require('./auth');
 const rulesEngine = require('./rules-engine');
 const { SYSTEM_CATEGORIES, TRADES, TIERS, SCOPE_DISCLAIMER } = require('./vocab');
 const { sendJson, sendError, readJson } = require('./http-util');
@@ -104,7 +105,8 @@ route('GET', /^\/api\/dashboard$/, async (req, res, { staff, query }) => {
      JOIN markets m ON m.id = c.market_id
      LEFT JOIN users u ON u.id = c.advisor_id
      WHERE ${scope.sql} AND c.status IN ('active','paused','prospect')
-     ORDER BY c.last_name`).all(...scope.params);
+     ORDER BY c.last_name`).all(...scope.params)
+    .map(({ password_hash, ...c }) => ({ ...c, has_portal_password: Boolean(password_hash) }));
 
   const items = db.prepare(
     `SELECT f.*, p.address_line1, p.city, c.first_name, c.last_name, c.tier, c.id AS client_id,
@@ -158,13 +160,34 @@ route('GET', /^\/api\/dashboard$/, async (req, res, { staff, query }) => {
 // ── Clients ───────────────────────────────────────────────────────────────
 const CLIENT_COLS = ['first_name','last_name','email','phone','preferred_contact','market_id','advisor_id','tier',
   'subscription_start','subscription_renewal','annual_rate','charter_member','intake_fee_paid','intake_fee_date',
-  'referral_source','status','notes'];
+  'referral_source','status','notes','password_hash'];
+
+function clientResponse(db, id) {
+  const { password_hash, ...row } = db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+  row.has_portal_password = Boolean(password_hash);
+  return row;
+}
+
+// Staff may set a client's portal password via a plain `password` field; the
+// raw hash column is never writable from a request body.
+function applyClientPassword(body) {
+  delete body.password_hash;
+  if (body.password != null && body.password !== '') {
+    if (String(body.password).length < 8) {
+      throw Object.assign(new Error('Portal password must be at least 8 characters'), { status: 400 });
+    }
+    body.password_hash = hashPassword(String(body.password));
+  }
+  delete body.password;
+}
 
 route('GET', /^\/api\/clients\/(\d+)$/, async (req, res, { staff, params }) => {
   const db = open();
-  const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(Number(params[0]));
-  if (!c) return sendError(res, 404, 'Client not found');
-  if (staff.role !== 'founder' && c.market_id !== staff.market_id) return sendError(res, 403, 'Outside your market');
+  const row = db.prepare('SELECT * FROM clients WHERE id = ?').get(Number(params[0]));
+  if (!row) return sendError(res, 404, 'Client not found');
+  if (staff.role !== 'founder' && row.market_id !== staff.market_id) return sendError(res, 403, 'Outside your market');
+  const { password_hash, ...c } = row;
+  c.has_portal_password = Boolean(password_hash);
   c.properties = db.prepare('SELECT * FROM properties WHERE client_id = ? AND active = 1').all(c.id);
   c.subscriptions = db.prepare('SELECT * FROM subscriptions WHERE client_id = ? ORDER BY period_start DESC').all(c.id);
   sendJson(res, 200, c);
@@ -177,10 +200,11 @@ route('POST', /^\/api\/clients$/, async (req, res, { staff }) => {
   if (!body.first_name || !body.last_name || !body.tier || !body.market_id) {
     return sendError(res, 400, 'first_name, last_name, tier, market_id are required');
   }
+  applyClientPassword(body);
   const { sql, params: p } = buildInsert('clients', CLIENT_COLS, body);
   const id = db.prepare(sql).run(...p).lastInsertRowid;
   audit('staff', staff.id, 'create', 'clients', id, `${body.first_name} ${body.last_name}`);
-  sendJson(res, 201, db.prepare('SELECT * FROM clients WHERE id = ?').get(id));
+  sendJson(res, 201, clientResponse(db, id));
 });
 
 route('PATCH', /^\/api\/clients\/(\d+)$/, async (req, res, { staff, params }) => {
@@ -190,10 +214,11 @@ route('PATCH', /^\/api\/clients\/(\d+)$/, async (req, res, { staff, params }) =>
   if (!existing) return sendError(res, 404, 'Client not found');
   if (staff.role !== 'founder' && existing.market_id !== staff.market_id) return sendError(res, 403, 'Outside your market');
   const body = await readJson(req);
+  applyClientPassword(body);
   const { sql, params: p } = buildUpdate('clients', CLIENT_COLS, body, id);
   db.prepare(sql).run(...p);
   audit('staff', staff.id, 'update', 'clients', id, Object.keys(body).join(','));
-  sendJson(res, 200, db.prepare('SELECT * FROM clients WHERE id = ?').get(id));
+  sendJson(res, 200, clientResponse(db, id));
 });
 
 // ── Properties & the Home Record ──────────────────────────────────────────

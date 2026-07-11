@@ -7,7 +7,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { open, audit, today, FILES_DIR } = require('./db');
 const rulesEngine = require('./rules-engine');
-const { TIERS, SCOPE_DISCLAIMER } = require('./vocab');
+const { SYSTEM_CATEGORIES, TIERS, SCOPE_DISCLAIMER } = require('./vocab');
 const { sendJson, sendError, readJson, readBody, pick, MAX_FILE_BODY } = require('./http-util');
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -120,6 +120,8 @@ function buildPortalRecord(client, property) {
     client: pick(client, ['id','first_name','last_name','email','phone','preferred_contact','tier',
       'subscription_start','subscription_renewal','charter_member','status']),
     tier_label: TIERS[client.tier]?.label || client.tier,
+    self_serve: client.tier === 'self_serve',
+    categories: SYSTEM_CATEGORIES,
     advisor,
     property: pick(property, VISIBLE.property),
     properties_count: undefined,
@@ -136,6 +138,22 @@ const route = (method, pattern, handler) => routes.push({ method, pattern, handl
 
 route('GET', /^\/api\/portal\/record$/, async (req, res, { session, query }) => {
   const client = getClient(session);
+
+  // Self-serve clients build their own record (US-S1): a brand-new account
+  // has no property yet, so the portal shows guided onboarding instead of 404.
+  const hasProperty = open().prepare(
+    'SELECT id FROM properties WHERE client_id = ? AND active = 1').get(client.id);
+  if (!hasProperty) {
+    return sendJson(res, 200, {
+      needs_onboarding: true,
+      self_serve: client.tier === 'self_serve',
+      client: pick(client, ['id','first_name','last_name','email','tier']),
+      tier_label: TIERS[client.tier]?.label || client.tier,
+      categories: SYSTEM_CATEGORIES,
+      disclaimer: SCOPE_DISCLAIMER,
+    });
+  }
+
   const { property, all } = clientProperty(client, query.get('property_id'));
   const record = buildPortalRecord(client, property);
   record.all_properties = all.map((p) => ({ id: p.id, address_line1: p.address_line1, city: p.city }));
@@ -159,13 +177,107 @@ route('POST', /^\/api\/portal\/requests$/, async (req, res, { session }) => {
   const client = getClient(session);
   const body = await readJson(req);
   if (!body.subject) return sendError(res, 400, 'subject is required');
-  const { property } = clientProperty(client, body.property_id);
+  // Requests are allowed before any property exists (e.g. a self-serve
+  // client asking to upgrade to an advisor tier, US-S3).
+  let property = null;
+  try { ({ property } = clientProperty(client, body.property_id)); } catch { /* no property yet */ }
   const db = open();
   const id = db.prepare(
     `INSERT INTO client_requests (client_id, property_id, created_at, subject, body, status) VALUES (?,?,?,?,?,'open')`
-  ).run(client.id, property.id, new Date().toISOString(), body.subject, body.body ?? null).lastInsertRowid;
+  ).run(client.id, property?.id ?? null, new Date().toISOString(), body.subject, body.body ?? null).lastInsertRowid;
   audit('client', client.id, 'create', 'client_requests', id, body.subject.slice(0, 80));
   sendJson(res, 201, db.prepare('SELECT * FROM client_requests WHERE id = ?').get(id));
+});
+
+// ── Self-Serve record building (US-S1/S2) ──────────────────────────────────
+// Only self_serve clients may write to their own record; on advisor tiers the
+// advisor is the author of the Home Record and the portal stays read-only.
+
+function assertSelfServe(client) {
+  if (client.tier !== 'self_serve') {
+    throw Object.assign(new Error(
+      'Record editing is a Self-Serve feature — on your membership, your advisor maintains the Home Record for you.'), { status: 403 });
+  }
+}
+
+const PROPERTY_WRITE = ['address_line1','address_line2','city','state','zip','year_built','square_footage',
+  'stories','bedrooms','bathrooms','property_type','construction_type','foundation_type','ownership_date'];
+const SYSTEM_WRITE = ['system_name','category','description','install_date','age_at_intake','expected_lifespan',
+  'condition_rating','model_number','serial_number','warranty_expiry','last_service_date'];
+
+route('POST', /^\/api\/portal\/property$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const db = open();
+  const existing = db.prepare('SELECT id FROM properties WHERE client_id = ? AND active = 1').get(client.id);
+  if (existing) return sendError(res, 409, 'You already have a home on record');
+  const body = await readJson(req);
+  if (!body.address_line1) return sendError(res, 400, 'Address is required');
+
+  const cols = PROPERTY_WRITE.filter((c) => body[c] !== undefined && body[c] !== null);
+  const id = db.prepare(
+    `INSERT INTO properties (${cols.join(',')}${cols.length ? ',' : ''}client_id, market_id, intake_date, record_completeness, active)
+     VALUES (${cols.map(() => '?').join(',')}${cols.length ? ',' : ''}?,?,?,?,1)`
+  ).run(...cols.map((c) => body[c]), client.id, client.market_id, today(), 25).lastInsertRowid;
+  audit('client', client.id, 'create', 'properties', id, `self-serve onboarding: ${body.address_line1}`);
+  sendJson(res, 201, pick(db.prepare('SELECT * FROM properties WHERE id = ?').get(id), VISIBLE.property));
+});
+
+route('POST', /^\/api\/portal\/systems$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const body = await readJson(req);
+  if (!body.system_name || !body.category) return sendError(res, 400, 'System name and category are required');
+  if (!SYSTEM_CATEGORIES.includes(body.category)) return sendError(res, 400, 'Pick a category from the list');
+
+  const db = open();
+  const cols = SYSTEM_WRITE.filter((c) => body[c] !== undefined && body[c] !== null);
+  const id = db.prepare(
+    `INSERT INTO systems (${cols.join(',')}, property_id) VALUES (${cols.map(() => '?').join(',')}, ?)`
+  ).run(...cols.map((c) => body[c]), property.id).lastInsertRowid;
+  audit('client', client.id, 'create', 'systems', id, body.system_name);
+  // The platform's intelligence without the service layer (US-S2): the rules
+  // engine runs on every self-entered system, same as an advisor entry.
+  const gen = rulesEngine.generateForProperty(property.id, { kind: 'client', id: client.id });
+  const system = db.prepare('SELECT * FROM systems WHERE id = ?').get(id);
+  sendJson(res, 201, {
+    ...pick({
+      ...system,
+      age_years: rulesEngine.systemAgeYears(system, property) != null
+        ? Math.round(rulesEngine.systemAgeYears(system, property) * 10) / 10 : null,
+      remaining_life: rulesEngine.remainingLife(system, property),
+    }, VISIBLE.system),
+    generated_items: gen.created,
+  });
+});
+
+route('PATCH', /^\/api\/portal\/systems\/(\d+)$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM systems WHERE id = ?').get(id);
+  if (!existing || existing.property_id !== property.id) return sendError(res, 404, 'Not your system');
+  const body = await readJson(req);
+  if (body.category !== undefined && !SYSTEM_CATEGORIES.includes(body.category)) {
+    return sendError(res, 400, 'Pick a category from the list');
+  }
+  const cols = SYSTEM_WRITE.filter((c) => body[c] !== undefined);
+  if (!cols.length) return sendError(res, 400, 'Nothing to update');
+  db.prepare(`UPDATE systems SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+    .run(...cols.map((c) => body[c]), id);
+  audit('client', client.id, 'update', 'systems', id, cols.join(','));
+  const gen = rulesEngine.generateForProperty(property.id, { kind: 'client', id: client.id });
+  sendJson(res, 200, { updated: id, generated_items: gen.created });
+});
+
+route('POST', /^\/api\/portal\/recompute$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  sendJson(res, 200, rulesEngine.generateForProperty(property.id, { kind: 'client', id: client.id }));
 });
 
 route('GET', /^\/api\/portal\/requests$/, async (req, res, { session }) => {

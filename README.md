@@ -42,6 +42,11 @@ checklist for replacing the demo passwords below before exposing it.
 | Client (Concierge) | `sarah@client.demo` | `welcome123` |
 | Client (Managed) | `james@client.demo` | `welcome123` |
 | Client (Guided) | `mia@client.demo` | `welcome123` |
+| Client (Self-Serve) | `taylor@client.demo` | `welcome123` |
+
+Self-Serve accounts can also be created from the login screen ("Create a
+Self-Serve account") — signup is open, payments are bypassed, and the new
+client builds their own Home Record through guided onboarding (US-S1/S2).
 
 ## What's implemented
 

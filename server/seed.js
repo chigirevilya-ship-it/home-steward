@@ -465,6 +465,28 @@ function seed({ reset = false } = {}) {
   mkIntakeFee.run(hassan, pHas, 375, rel(-250), 'ACH', 1, rel(-240));
   mkIntakeFee.run(alvarez, pAlv, 375, rel(-340), 'ACH', 1, rel(-330));
 
+  // ── Self-Serve demo (US-S1/S2): software only, no advisor, no intake ──
+  const taylor = mkClient.run('Taylor', 'Brooks', 'taylor@client.demo', '617-555-0207', 'email',
+    BOS, null, 'self_serve', rel(-60), rel(305), 129, 0, 0, null,
+    'self_serve_signup', 'active', null, clientPw).lastInsertRowid;
+  const pTaylor = mkProp.run('86 Winter Hill Ave', 'Somerville', 'MA', '02145', taylor, BOS,
+    1998, 1650, 2, 3, 1.5, 'townhouse', 'wood_frame', 'poured_concrete', rel(-1500),
+    null, rel(-58), null, 40,
+    null).lastInsertRowid;
+  mkSys.run('Gas furnace', pTaylor, 'HVAC - Heating',
+    'Forced hot air, basement closet.', yearsAgo(10), null, 20, 4,
+    null, null, null, rel(-430), 0, null);
+  mkSys.run('Gas water heater', pTaylor, 'Water Heater - Gas',
+    '40-gal tank, basement.', yearsAgo(7), null, 12, 4,
+    null, null, null, null, 0, null);
+  mkSys.run('Asphalt shingle roof', pTaylor, 'Roof - Asphalt',
+    'Installed by previous owner, per disclosure.', yearsAgo(16), null, 30, 3,
+    null, null, null, null, 0, null);
+  mkSys.run('Smoke / CO detectors', pTaylor, 'Safety Systems',
+    'Battery units, replaced last year.', yearsAgo(1), null, 10, 5,
+    null, null, null, null, 0, null);
+  mkSub.run(taylor, rel(-60), rel(305), 'self_serve', 129, 'payments bypassed (demo)', rel(-60), 'Card', 'paid');
+
   // ── Documents (small real files so download works out of the box) ─────
   const mkDoc = ins(`INSERT INTO documents
     (document_name, document_type, file_path, mime_type, size_bytes, property_id, system_id, maintenance_log_id, permit_id, description, upload_date, uploaded_by_user, uploaded_by_client)
@@ -521,11 +543,13 @@ function seed({ reset = false } = {}) {
   mkFwd.run('LAFD brush clearance', pAlv, null, rel(10), '30d', 'standard', 'scheduled',
     400, 700, 0, null, 'LAFD inspection letters go out early summer; non-compliance fines start at $356.', null);
 
-  console.log(`Seeded: 3 markets, 5 staff, 6 clients, 5 properties, ${db.prepare('SELECT COUNT(*) n FROM systems').get().n} systems, ` +
+  console.log(`Seeded: 3 markets, 5 staff, ${db.prepare('SELECT COUNT(*) n FROM clients').get().n} clients, ` +
+    `${db.prepare('SELECT COUNT(*) n FROM properties').get().n} properties, ${db.prepare('SELECT COUNT(*) n FROM systems').get().n} systems, ` +
     `${db.prepare('SELECT COUNT(*) n FROM maintenance_rules').get().n} rules, ` +
     `${db.prepare('SELECT COUNT(*) n FROM forward_schedule').get().n} schedule items (${gen.created} rule-generated).`);
   console.log('Logins — staff: founder@steward.demo / marcus@ / elena@ / dana@ / priya@steward.demo (steward123)');
   console.log('         clients: sarah@ / james@ / mia@ / nadia@ / victor@client.demo (welcome123)');
+  console.log('         self-serve demo: taylor@client.demo (welcome123)');
   return true;
 }
 

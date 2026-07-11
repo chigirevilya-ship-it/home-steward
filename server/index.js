@@ -97,6 +97,60 @@ async function handleLogin(req, res) {
   sendError(res, 401, 'Invalid email or password');
 }
 
+// Self-Serve signup (US-S1). Public endpoint — creates a client on the
+// self_serve tier with no advisor and no intake. Payments are intentionally
+// bypassed for now; the subscription fields are recorded as if paid so the
+// portal renders sensibly.
+async function handleSignup(req, res) {
+  const ip = clientIp(req);
+  if (!checkRateLimit(ip)) {
+    return sendError(res, 429, 'Too many attempts. Try again in a few minutes.');
+  }
+  const db = open();
+  const body = await readJson(req);
+  const firstName = String(body.first_name || '').trim();
+  const lastName = String(body.last_name || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const password = String(body.password || '');
+  const marketId = Number(body.market_id);
+
+  const fail = (status, msg) => { recordLoginFailure(ip); return sendError(res, status, msg); };
+  if (!firstName || !lastName || !email || !password || !marketId) {
+    return fail(400, 'First name, last name, email, password, and market are required');
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(400, 'That does not look like an email address');
+  if (password.length < 8) return fail(400, 'Password must be at least 8 characters');
+  const market = db.prepare(`SELECT id FROM markets WHERE id = ? AND status = 'active'`).get(marketId);
+  if (!market) return fail(400, 'Pick one of the available metro areas');
+  const taken = db.prepare('SELECT id FROM clients WHERE lower(email) = ?').get(email)
+    || db.prepare('SELECT id FROM users WHERE lower(email) = ?').get(email);
+  if (taken) return fail(409, 'An account with that email already exists');
+
+  const { TIERS } = require('./vocab');
+  const start = today();
+  const renewal = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const id = db.prepare(
+    `INSERT INTO clients (first_name, last_name, email, preferred_contact, market_id, tier,
+       subscription_start, subscription_renewal, annual_rate, referral_source, status, password_hash)
+     VALUES (?,?,?,'email',?,'self_serve',?,?,?,'self_serve_signup','active',?)`
+  ).run(firstName, lastName, email, marketId, start, renewal,
+    TIERS.self_serve.price, auth.hashPassword(password)).lastInsertRowid;
+  audit('client', id, 'signup', 'clients', id, 'self-serve signup (payments bypassed)');
+
+  clearLoginAttempts(ip);
+  const token = auth.createSession('client', id);
+  res.setHeader('Set-Cookie', sessionCookie(token));
+  const { password_hash, notes, ...user } = db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+  sendJson(res, 201, { kind: 'client', user });
+}
+
+// Public list of active markets for the signup form (names only).
+function handleSignupMarkets(res) {
+  const db = open();
+  sendJson(res, 200, db.prepare(
+    `SELECT id, name, city, state FROM markets WHERE status = 'active' ORDER BY name`).all());
+}
+
 function handleMe(res, session) {
   const db = open();
   if (session.kind === 'staff') {
@@ -185,6 +239,8 @@ function handleExport(res, session, propertyIdRaw) {
 
 async function handleApi(req, res, pathname, query) {
   if (req.method === 'POST' && pathname === '/api/login') return handleLogin(req, res);
+  if (req.method === 'POST' && pathname === '/api/signup') return handleSignup(req, res);
+  if (req.method === 'GET' && pathname === '/api/signup/markets') return handleSignupMarkets(res);
 
   const cookies = parseCookies(req);
   const session = auth.getSession(cookies.steward_session);

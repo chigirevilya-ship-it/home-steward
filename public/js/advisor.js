@@ -28,6 +28,7 @@ export async function renderDashboard(view) {
       <h1>${greeting}, ${esc(me.full_name.split(' ')[0])}</h1>
       <div class="sub">${isAdvisor ? 'Your book' : 'Market view'} · ${fmtDate(d.today)}</div>
     </div>
+    <div class="actions"><button class="btn btn-primary" id="client-add">Add client</button></div>
   </div>
 
   <div class="tiles">
@@ -87,7 +88,7 @@ export async function renderDashboard(view) {
 
   <div class="section"><div class="section-head"><h2>${isAdvisor ? 'My clients' : 'Clients'}</h2></div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Client</th><th>Tier</th><th>Status</th><th>Advisor</th><th>Renewal</th><th>Homes</th></tr></thead>
+      <thead><tr><th>Client</th><th>Tier</th><th>Status</th><th>Advisor</th><th>Renewal</th><th>Homes</th><th></th></tr></thead>
       <tbody>${d.clients.map((c) => `
         <tr class="clickable" data-client="${c.id}">
           <td><b>${esc(c.first_name)} ${esc(c.last_name)}</b><br><span class="small muted">${esc(c.preferred_contact || '')} ${c.charter_member ? '· charter' : ''}</span></td>
@@ -96,6 +97,7 @@ export async function renderDashboard(view) {
           <td>${esc(c.advisor_name || '—')}</td>
           <td>${c.subscription_renewal ? fmtDate(c.subscription_renewal) : '—'}</td>
           <td>${c.property_count}</td>
+          <td><button class="btn btn-sm" data-client-edit="${c.id}">Edit</button></td>
         </tr>`).join('')}
       </tbody>
     </table></div>
@@ -115,6 +117,85 @@ export async function renderDashboard(view) {
       else toast('No property on record for this client yet — start an intake.');
     });
   }
+  const refresh = () => renderDashboard(view);
+  $('#client-add', view).addEventListener('click', () => clientModal(null, refresh));
+  for (const b of $$('[data-client-edit]', view)) {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clientModal(d.clients.find((c) => c.id === Number(b.dataset.clientEdit)), refresh);
+    });
+  }
+}
+
+// ── Client create/edit ─────────────────────────────────────────────────────
+export function clientModal(existing, done) {
+  const isFounder = state.me.user.role === 'founder';
+  const tiers = meta().tiers;
+  // New clients default to the creating advisor's own book so they don't
+  // vanish from the "my book" dashboard the moment they're created.
+  const defaultAdvisor = existing ? existing.advisor_id : state.me.user.id;
+  const advisorOptions = (marketId) => [{ value: '', label: '— unassigned —' },
+    ...meta().advisors.filter((a) => !marketId || a.market_id === Number(marketId))
+      .map((a) => ({ value: a.id, label: `${a.full_name} (${a.role})`, selected: defaultAdvisor === a.id }))];
+
+  const m = modal(existing ? `Edit — ${existing.first_name} ${existing.last_name}` : 'Add client', `
+    <div class="form-grid">
+      ${field('first_name', 'First name', input(`value="${esc(existing?.first_name || '')}"`))}
+      ${field('last_name', 'Last name', input(`value="${esc(existing?.last_name || '')}"`))}
+      ${field('email', 'Email (their portal login)', input(`type="email" value="${esc(existing?.email || '')}"`))}
+      ${field('phone', 'Phone', input(`value="${esc(existing?.phone || '')}"`))}
+      ${field('preferred_contact', 'Preferred contact — honor religiously', select(['email', 'text', 'call']
+        .map((v) => ({ value: v, label: v, selected: existing?.preferred_contact === v }))))}
+      ${isFounder ? field('market_id', 'Market', select(meta().markets
+        .map((mk) => ({ value: mk.id, label: mk.name, selected: (existing?.market_id ?? meta().markets[0]?.id) === mk.id })), 'data-number')) : ''}
+      ${field('advisor_id', 'Advisor', select(advisorOptions(existing?.market_id), 'data-number'))}
+      ${field('tier', 'Tier', select(Object.entries(tiers)
+        .map(([v, t]) => ({ value: v, label: `${t.label} ($${t.price}/yr)`, selected: (existing?.tier ?? 'guided') === v }))))}
+      ${field('status', 'Status', select(['prospect', 'active', 'paused', 'cancelled']
+        .map((v) => ({ value: v, label: v, selected: (existing?.status ?? 'prospect') === v }))))}
+      ${field('annual_rate', 'Annual rate ($)', input(`type="number" step="1" value="${existing?.annual_rate ?? ''}" data-number`))}
+      ${field('subscription_start', 'Subscription start', input(`type="date" value="${existing?.subscription_start || ''}"`))}
+      ${field('subscription_renewal', 'Renewal date', input(`type="date" value="${existing?.subscription_renewal || ''}"`))}
+      ${field('referral_source', 'Referral source', input(`value="${esc(existing?.referral_source || '')}"`))}
+      <label class="checkbox-row"><input type="checkbox" name="charter_member" ${existing?.charter_member ? 'checked' : ''}> Charter member (15% off for life)</label>
+      ${field('password', existing?.has_portal_password ? 'Reset portal password (blank = keep current)' : 'Portal password (blank = no portal access yet)',
+        input(`type="text" minlength="8" placeholder="8+ characters" autocomplete="off"`))}
+      <div class="span2">${field('notes', 'Household notes (internal — never client-visible)', textarea(`rows="2"`))}</div>
+    </div>
+    <div class="form-actions"><button class="btn btn-primary" id="client-save">${existing ? 'Save changes' : 'Create client'}</button></div>`,
+    { wide: true });
+
+  if (existing) $('[name=notes]', m.body).value = existing.notes || '';
+
+  // Tier changes suggest the list price (unless a rate was already typed).
+  const tierEl = $('[name=tier]', m.body);
+  const rateEl = $('[name=annual_rate]', m.body);
+  tierEl.addEventListener('change', () => {
+    const t = tiers[tierEl.value];
+    if (t && !rateEl.dataset.touched) rateEl.value = t.price;
+  });
+  rateEl.addEventListener('input', () => { rateEl.dataset.touched = '1'; });
+
+  // Founder switching markets re-filters the advisor list.
+  const marketEl = $('[name=market_id]', m.body);
+  if (marketEl) {
+    marketEl.addEventListener('change', () => {
+      const advisorEl = $('[name=advisor_id]', m.body);
+      advisorEl.innerHTML = advisorOptions(marketEl.value)
+        .map((o) => `<option value="${o.value}" ${o.selected ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
+    });
+  }
+
+  $('#client-save', m.body).addEventListener('click', async () => {
+    const body = formValues(m.body);
+    if (!body.first_name || !body.last_name) return toast('First and last name are required', 'err');
+    try {
+      if (existing) await api(`/api/clients/${existing.id}`, { method: 'PATCH', body });
+      else await api('/api/clients', { method: 'POST', body });
+      toast(existing ? 'Client updated' : `Client created${body.password ? ' with portal access' : ''} — start an intake to build their Home Record`);
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
 }
 
 function itemsTable(items, isOverdue) {

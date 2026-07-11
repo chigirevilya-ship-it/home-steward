@@ -285,7 +285,11 @@ async function handleApi(req, res, pathname, query) {
   sendError(res, 404, `No route: ${req.method} ${pathname}`);
 }
 
-function serveStatic(res, pathname) {
+// Static files are served with `no-cache` + Last-Modified so browsers (and
+// Cloudflare's edge, which caches js/css by default) revalidate on every
+// load instead of serving a stale app after a deploy. Unchanged files still
+// answer 304 with no body, so the app stays fast.
+function serveStatic(req, res, pathname) {
   let rel = pathname === '/' ? '/index.html' : pathname;
   const filePath = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!filePath.startsWith(PUBLIC_DIR)) return sendError(res, 403, 'Forbidden');
@@ -293,8 +297,19 @@ function serveStatic(res, pathname) {
   if (!fs.existsSync(finalPath) || fs.statSync(finalPath).isDirectory()) {
     finalPath = path.join(PUBLIC_DIR, 'index.html'); // SPA fallback
   }
-  const ext = path.extname(finalPath).toLowerCase();
-  res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+  const stat = fs.statSync(finalPath);
+  const lastModified = stat.mtime.toUTCString();
+  const headers = {
+    'Content-Type': MIME[path.extname(finalPath).toLowerCase()] || 'application/octet-stream',
+    'Cache-Control': 'no-cache',
+    'Last-Modified': lastModified,
+  };
+  const since = req.headers['if-modified-since'];
+  if (since && new Date(since).getTime() >= Math.floor(stat.mtime.getTime() / 1000) * 1000) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  res.writeHead(200, headers);
   fs.createReadStream(finalPath).pipe(res);
 }
 
@@ -304,7 +319,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) {
       await handleApi(req, res, url.pathname, url.searchParams);
     } else {
-      serveStatic(res, url.pathname);
+      serveStatic(req, res, url.pathname);
     }
   } catch (err) {
     const status = err.status || 500;

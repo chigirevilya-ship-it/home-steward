@@ -6,6 +6,13 @@ TLS, and (optionally) an auth wall in front of the app via Cloudflare Access.
 
 Everything here matches `docker-compose.yml` in the repo root.
 
+**A note on the CLI command name:** older DSM Docker packages only ship the
+legacy Python `docker-compose` (hyphenated, v1.x) rather than the newer
+`docker compose` (space, V2 plugin) used by most current guides elsewhere.
+This guide uses `docker-compose` throughout — if your DSM happens to have the
+newer plugin instead, `docker compose` (no hyphen) works identically. Check
+with `docker-compose version` vs `docker compose version` if unsure.
+
 ## 0. Before you start
 
 Requirements on the NAS:
@@ -71,8 +78,8 @@ COOKIE_SECURE=1
 
 ```bash
 cd /volume1/docker/steward
-docker compose up -d --build
-docker compose logs -f steward   # watch it seed on first boot, Ctrl-C to detach
+docker-compose up -d --build
+docker-compose logs -f steward   # watch it seed on first boot, Ctrl-C to detach
 ```
 
 **Via Container Manager UI (no SSH needed):** Container Manager → **Project**
@@ -94,9 +101,9 @@ README). That's fine on localhost; it is **not** fine once a real hostname is
 live on the internet. Change every account you intend to keep:
 
 ```bash
-docker compose exec steward node server/set-password.js founder@steward.demo 'a-real-passphrase-here'
-docker compose exec steward node server/set-password.js marcus@steward.demo  'another-real-one'
-docker compose exec steward node server/set-password.js sarah@client.demo    'yet-another'
+docker-compose exec steward node server/set-password.js founder@steward.demo 'a-real-passphrase-here'
+docker-compose exec steward node server/set-password.js marcus@steward.demo  'another-real-one'
+docker-compose exec steward node server/set-password.js sarah@client.demo    'yet-another'
 # ...repeat for every account you're keeping
 ```
 
@@ -115,23 +122,23 @@ Other things worth doing at this point:
 - **Back up `data/`** on a schedule — it's the entire database plus uploaded
   files. The named Docker volume `steward-data` lives under
   `/volume1/@docker/volumes/` on DSM; Synology's Hyper Backup or a simple
-  `docker compose exec steward sqlite3 /app/data/steward.db ".backup /app/data/backup.db"`
+  `docker-compose exec steward sqlite3 /app/data/steward.db ".backup /app/data/backup.db"`
   cron job both work (WAL mode is already on, so this is safe to run live).
 
 ## Operating it day to day
 
 ```bash
-docker compose logs -f steward      # tail app logs
-docker compose restart steward      # restart just the app
-docker compose pull && docker compose up -d --build   # update to a new commit
-docker compose down                 # stop everything (data volume persists)
+docker-compose logs -f steward      # tail app logs
+docker-compose restart steward      # restart just the app
+docker-compose pull && docker-compose up -d --build   # update to a new commit
+docker-compose down                 # stop everything (data volume persists)
 ```
 
 To pull a new version of the code after I push more changes:
 
 ```bash
 git pull
-docker compose up -d --build
+docker-compose up -d --build
 ```
 
 ## If you don't want the LAN port open

@@ -10,6 +10,10 @@ services:
       # cloudflared tunnel below, or any TLS-terminating proxy). Leave unset
       # while testing over plain http://<nas-ip>:8710 on your LAN.
       - COOKIE_SECURE=${COOKIE_SECURE:-1}
+      # Optional: powers AI suggestions for systems/equipment (Claude API).
+      # Without a key, the Suggest button falls back to the built-in
+      # maintenance rule library — the app works fully either way.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - steward-data:/app/data
     # Only needed if you want LAN access directly (bypassing the tunnel) too,

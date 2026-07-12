@@ -504,8 +504,24 @@ function seed({ reset = false } = {}) {
     'Battery units, replaced last year.', yearsAgo(1), null, 10, 5,
     null, null, null, null, 0, null);
   mkSub.run(taylor, rel(-60), rel(305), 'self_serve', 129, 'payments bypassed (demo)', rel(-60), 'Card', 'paid');
-  mkEquip.run(pTaylor, null, 'Portable generator', 'Kept in garage for outages; self-entered.', 'Honda', 'EU2200i', null,
-    yearsAgo(3), 12, rel(200), 4, null);
+  const eqGen = mkEquip.run(pTaylor, null, 'Portable generator', 'Kept in garage for outages; self-entered.', 'Honda', 'EU2200i', null,
+    yearsAgo(3), 12, rel(200), 4, null).lastInsertRowid;
+
+  // Self-serve extras: a personal contractor, a custom repeating task, and a
+  // service they logged themselves with a receipt attached.
+  const ccLuis = ins(`INSERT INTO client_contractors (client_id, name, company, specialty, phone, email, notes)
+    VALUES (?,?,?,?,?,?,?)`)
+    .run(taylor, 'Luis Ortega', 'Somerville Handy Pros', 'Handyman', '617-555-0401', 'luis@handypros.demo',
+      'Found on the neighborhood list — reliable, texts back fast.').lastInsertRowid;
+  ins(`INSERT INTO forward_schedule (item_name, property_id, equipment_id, due_date, due_window, priority, status,
+       deferral_risk, custom, repeat_value, repeat_unit)
+     VALUES (?,?,?,?,?,?,'upcoming',?,1,?,?)`)
+    .run('Run the generator for 20 minutes', pTaylor, eqGen, rel(12), '30d', 'standard',
+      'Small engines gum up if they sit — a monthly run keeps it start-ready for the next outage.', 1, 'months');
+  const taylorLog = ins(`INSERT INTO maintenance_log (property_id, date, description, invoice_amount, client_contractor_id, outcome_notes)
+    VALUES (?,?,?,?,?,?)`)
+    .run(pTaylor, rel(-20), 'Re-caulked both bathrooms and sealed the kitchen backsplash.', 260, ccLuis,
+      'Luis suggested checking the tub grout again in a year.').lastInsertRowid;
 
   // ── Documents (small real files so download works out of the box) ─────
   const mkDoc = ins(`INSERT INTO documents
@@ -532,6 +548,10 @@ function seed({ reset = false } = {}) {
     'Wolf Extended Warranty Certificate\nModel DF486G, Serial WF-99120\nCoverage: parts and labor.\n');
   mkDoc.run('Wolf range — extended warranty', 'warranty', f.rel, 'text/plain', f.size, pWhit, sWhitAppl, eqWolf, null, null,
     'Extended warranty certificate for the Wolf range.', rel(-400), smeBos, null);
+  f = writeDemoFile('taylor-caulking-receipt.txt',
+    'Somerville Handy Pros — Receipt\nRe-caulk two bathrooms + kitchen backsplash seal\nTotal: $260.00 (paid cash)\n');
+  mkDoc.run('Caulking receipt — Handy Pros', 'receipt', f.rel, 'text/plain', f.size, pTaylor, null, null, taylorLog, null,
+    'Receipt for bathroom/kitchen caulking.', rel(-20), null, taylor);
 
   // ── Client request (portal) ────────────────────────────────────────────
   ins(`INSERT INTO client_requests (client_id, property_id, created_at, subject, body, status) VALUES (?,?,?,?,?,?)`)

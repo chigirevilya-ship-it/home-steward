@@ -90,27 +90,40 @@ function selfSystemModal(r, existing, done) {
       ${field('last_service_date', 'Last serviced (if you know)', input(`type="date" value="${existing?.last_service_date || ''}"`))}
       ${field('model_number', 'Model # (from the data plate)', input(`value="${esc(existing?.model_number || '')}"`))}
       ${field('warranty_expiry', 'Warranty until', input(`type="date" value="${existing?.warranty_expiry || ''}"`))}
-      <div class="span2">${field('description', 'Notes', textarea(`rows="2"`))}</div>
+      <div class="span2">${field('description', 'Description', textarea(`rows="2"`))}</div>
     </div>
-    <div class="form-actions"><button class="btn btn-primary" id="ss-save">${existing ? 'Save changes' : 'Add system'}</button></div>`,
+    <div class="suggest-panel" id="sg-panel" style="display:none"></div>
+    <div class="form-actions">
+      <button type="button" class="btn" id="sg-btn">✨ Suggest schedule & description</button>
+      <button class="btn btn-primary" id="ss-save">${existing ? 'Save changes' : 'Add system'}</button>
+    </div>`,
     { wide: true });
   bindStarInputs(m.body);
   if (existing) $('[name=description]', m.body).value = existing.description || '';
-  $('#ss-save', m.body).addEventListener('click', async () => {
+
+  let savedId = existing?.id ?? null;
+  async function saveItem() {
     const body = formValues(m.body);
     body.condition_rating = readStars(m.body, 'condition_rating');
-    if (!body.system_name) return toast('Give the system a name', 'err');
+    if (!body.system_name) throw new Error('Give the system a name first');
+    if (savedId) {
+      await api(`/api/portal/systems/${savedId}`, { method: 'PATCH', body });
+    } else {
+      const res = await api('/api/portal/systems', { method: 'POST', body });
+      savedId = res.id;
+    }
+    return savedId;
+  }
+
+  $('#ss-save', m.body).addEventListener('click', async () => {
     try {
-      const res = existing
-        ? await api(`/api/portal/systems/${existing.id}`, { method: 'PATCH', body })
-        : await api('/api/portal/systems', { method: 'POST', body });
+      await saveItem();
       invalidate();
-      toast(res.generated_items
-        ? `Saved — ${res.generated_items} maintenance item(s) added to your schedule`
-        : 'Saved');
+      toast('Saved');
       m.close(); done();
     } catch (err) { toast(err.message, 'err'); }
   });
+  bindSuggest(m, r, 'system', existing, saveItem, done);
 }
 
 function warrantyBadge(status, expiry) {
@@ -135,65 +148,375 @@ function selfEquipmentModal(r, existing, done) {
       ${field('expected_lifespan', 'Expected lifespan (yrs)', input(`type="number" step="0.5" value="${existing?.expected_lifespan ?? ''}" data-number`))}
       ${field('warranty_expiry', 'Warranty expires', input(`type="date" value="${existing?.warranty_expiry || ''}"`))}
       <div class="field"><span class="field-label">Condition</span>${starInput('condition_rating', existing?.condition_rating || 0)}</div>
-      <div class="span2">${field('description', 'Notes', textarea(`rows="2"`))}</div>
+      <div class="span2">${field('description', 'Description', textarea(`rows="2"`))}</div>
     </div>
-    <div class="form-actions"><button class="btn btn-primary" id="pe-save">${existing ? 'Save changes' : 'Add equipment'}</button></div>`,
+    <div class="suggest-panel" id="sg-panel" style="display:none"></div>
+    <div class="form-actions">
+      <button type="button" class="btn" id="sg-btn">✨ Suggest schedule & description</button>
+      <button class="btn btn-primary" id="pe-save">${existing ? 'Save changes' : 'Add equipment'}</button>
+    </div>`,
     { wide: true });
   bindStarInputs(m.body);
   if (existing) $('[name=description]', m.body).value = existing.description || '';
-  $('#pe-save', m.body).addEventListener('click', async () => {
+
+  let savedId = existing?.id ?? null;
+  async function saveItem() {
     const body = formValues(m.body);
     body.condition_rating = readStars(m.body, 'condition_rating');
-    if (!body.name) return toast('Name the equipment', 'err');
+    if (!body.name) throw new Error('Name the equipment first');
+    if (savedId) {
+      await api(`/api/portal/equipment/${savedId}`, { method: 'PATCH', body });
+    } else {
+      const res = await api('/api/portal/equipment', { method: 'POST', body });
+      savedId = res.id;
+    }
+    return savedId;
+  }
+
+  $('#pe-save', m.body).addEventListener('click', async () => {
     try {
-      if (existing) await api(`/api/portal/equipment/${existing.id}`, { method: 'PATCH', body });
-      else await api('/api/portal/equipment', { method: 'POST', body });
+      await saveItem();
       invalidate();
       toast('Equipment saved');
       m.close(); done();
     } catch (err) { toast(err.message, 'err'); }
   });
+  bindSuggest(m, r, 'equipment', existing, saveItem, done);
 }
 
-// Service log modal — used for ad-hoc "Log service" and per-item "Mark done".
-function serviceModal(r, forwardItem, done) {
-  const m = modal(forwardItem ? `Mark done — ${forwardItem.item_name}` : 'Log service', `
+const DOC_CATEGORIES = ['receipt', 'invoice', 'quote', 'contract', 'photo', 'warranty', 'other'];
+
+function fileRowsHtml() {
+  return `
+    <div class="span2"><span class="field-label">Attach documents (each with a category)</span>
+      <div id="svc-files" style="margin-top:6px"></div>
+      <button type="button" class="btn btn-sm" id="svc-file-add">+ Add a file</button>
+    </div>`;
+}
+function addFileRow(container) {
+  const row = document.createElement('div');
+  row.className = 'doc-file-row';
+  row.innerHTML = `
+    <input type="file" class="control svc-file" style="max-width:260px">
+    <select class="control svc-file-type" style="max-width:130px">
+      ${DOC_CATEGORIES.map((c) => `<option>${c}</option>`).join('')}
+    </select>
+    <button type="button" class="btn btn-sm svc-file-rm">×</button>`;
+  row.querySelector('.svc-file-rm').addEventListener('click', () => row.remove());
+  container.appendChild(row);
+}
+async function uploadFileRows(mBody, logId, systemId, equipmentId) {
+  let uploaded = 0;
+  for (const row of $$('.doc-file-row', mBody)) {
+    const file = row.querySelector('.svc-file').files[0];
+    if (!file) continue;
+    const q = new URLSearchParams({
+      name: file.name, type: row.querySelector('.svc-file-type').value,
+      ...(logId ? { log_id: logId } : {}),
+      ...(systemId ? { system_id: systemId } : {}),
+      ...(equipmentId ? { equipment_id: equipmentId } : {}),
+    });
+    const res = await fetch(`/api/portal/documents?${q}`, { method: 'POST', body: file,
+      headers: { 'Content-Type': file.type || 'application/octet-stream' } });
+    if (res.ok) uploaded++;
+  }
+  return uploaded;
+}
+
+// Service log modal — "Log service", per-item "Mark done", and edit mode.
+function serviceModal(r, opts, done) {
+  const { forwardItem = null, existing = null } = opts || {};
+  const title = existing ? 'Edit service record' : forwardItem ? `Mark done — ${forwardItem.item_name}` : 'Log service';
+  const attachedDocs = existing ? r.documents.filter((d) => d.maintenance_log_id === existing.id) : [];
+  const m = modal(title, `
     ${forwardItem ? '<div class="notice">This closes the task and schedules the next occurrence automatically.</div>' : ''}
     <div class="form-grid">
-      ${field('date', 'Work date', input(`type="date" value="${new Date().toISOString().slice(0, 10)}"`))}
-      ${field('performed_by', 'Who did the work', input(`placeholder="Me, ACME Plumbing…"`))}
+      ${field('date', 'Work date', input(`type="date" value="${existing?.date || new Date().toISOString().slice(0, 10)}"`))}
+      ${field('client_contractor_id', 'Contractor (from your book)', select([{ value: '', label: '— none / myself —' },
+        ...r.my_contractors.map((c) => ({ value: c.id, label: c.company ? `${c.name} — ${c.company}` : c.name,
+          selected: existing?.client_contractor_id === c.id }))], 'data-number'))}
+      ${field('performed_by', 'Or who did the work (free text)', input(`value="${esc(existing?.performed_by || '')}" placeholder="Me, a neighbor…"`))}
+      ${field('invoice_amount', 'Cost ($, optional)', input(`type="number" step="0.01" value="${existing?.invoice_amount ?? ''}" data-number`))}
       ${field('system_id', 'System', select([{ value: '', label: '— none —' },
-        ...r.systems.map((s) => ({ value: s.id, label: s.system_name, selected: forwardItem?.system_id === s.id }))], 'data-number'))}
+        ...r.systems.map((s) => ({ value: s.id, label: s.system_name,
+          selected: (existing?.system_id ?? forwardItem?.system_id) === s.id }))], 'data-number'))}
       ${field('equipment_id', 'Equipment', select([{ value: '', label: '— none —' },
-        ...r.equipment.map((e) => ({ value: e.id, label: e.name }))], 'data-number'))}
-      ${field('invoice_amount', 'Cost ($, optional)', input(`type="number" step="0.01" data-number`))}
+        ...r.equipment.map((e) => ({ value: e.id, label: e.name,
+          selected: (existing?.equipment_id ?? forwardItem?.equipment_id) === e.id }))], 'data-number'))}
       <div class="span2">${field('description', 'What was done', textarea(`rows="3"`))}</div>
-      <div class="span2"><label class="field"><span class="field-label">Attach receipt / photo (optional)</span>
-        <input type="file" id="svc-doc" class="control"></label></div>
+      <div class="span2">${field('outcome_notes', 'Notes / outcome (optional)', textarea(`rows="2"`))}</div>
+      ${attachedDocs.length ? `<div class="span2"><span class="field-label">Attached documents</span>
+        ${attachedDocs.map((doc) => `<div class="item-line small"><span class="chip">${label(doc.document_type)}</span>
+          <a href="/api/documents/${doc.id}/file" target="_blank">${esc(doc.document_name)}</a></div>`).join('')}</div>` : ''}
+      ${fileRowsHtml()}
     </div>
-    <div class="form-actions"><button class="btn btn-primary" id="svc-save">${forwardItem ? 'Mark done' : 'Log service'}</button></div>`,
+    <div class="form-actions">
+      ${existing ? '<button class="btn btn-danger" id="svc-delete">Delete record</button>' : ''}
+      <button class="btn btn-primary" id="svc-save">${existing ? 'Save changes' : forwardItem ? 'Mark done' : 'Log service'}</button>
+    </div>`,
     { wide: true });
+  $('[name=description]', m.body).value = existing?.description || '';
+  $('[name=outcome_notes]', m.body).value = existing?.outcome_notes || '';
+  const filesBox = $('#svc-files', m.body);
+  addFileRow(filesBox);
+  $('#svc-file-add', m.body).addEventListener('click', () => addFileRow(filesBox));
+
   $('#svc-save', m.body).addEventListener('click', async () => {
     const body = formValues(m.body);
     if (!body.description) return toast('Describe the work', 'err');
-    if (forwardItem) body.forward_item_id = forwardItem.id;
     try {
-      const file = $('#svc-doc', m.body)?.files[0];
-      const res = await api('/api/portal/service', { method: 'POST', body });
-      if (file) {
-        const q = new URLSearchParams({ name: file.name, type: 'invoice', log_id: res.log_id,
-          ...(body.system_id ? { system_id: body.system_id } : {}),
-          ...(body.equipment_id ? { equipment_id: body.equipment_id } : {}) });
-        await fetch(`/api/portal/documents?${q}`, { method: 'POST', body: file,
-          headers: { 'Content-Type': file.type || 'application/octet-stream' } });
+      let logId;
+      if (existing) {
+        await api(`/api/portal/service/${existing.id}`, { method: 'PATCH', body });
+        logId = existing.id;
+      } else {
+        if (forwardItem) body.forward_item_id = forwardItem.id;
+        const res = await api('/api/portal/service', { method: 'POST', body });
+        logId = res.log_id;
+        var closed = res.closed_forward_item, nextOcc = res.next_occurrence, nextGen = res.next_items_generated;
       }
+      const uploaded = await uploadFileRows(m.body, logId, body.system_id, body.equipment_id);
       invalidate();
-      let msg = 'Service logged';
-      if (res.closed_forward_item) msg += ' · task closed';
-      if (res.next_items_generated) msg += ` · next occurrence scheduled`;
+      let msg = existing ? 'Service record updated' : 'Service logged';
+      if (uploaded) msg += ` · ${uploaded} document(s) attached`;
+      if (typeof closed !== 'undefined' && closed) msg += ' · task closed';
+      if (typeof nextOcc !== 'undefined' && nextOcc) msg += ' · next occurrence scheduled';
+      else if (typeof nextGen !== 'undefined' && nextGen) msg += ' · next occurrence scheduled';
       toast(msg);
       m.close(); done();
     } catch (err) { toast(err.message, 'err'); }
+  });
+  $('#svc-delete', m.body)?.addEventListener('click', async () => {
+    if (!confirm('Delete this service record? Attached documents stay in your Documents.')) return;
+    await api(`/api/portal/service/${existing.id}`, { method: 'DELETE' });
+    invalidate();
+    toast('Service record deleted');
+    m.close(); done();
+  });
+}
+
+// Custom task modal (your own maintenance schedule).
+function taskModal(r, existing, done) {
+  const m = modal(existing ? `Edit task — ${existing.item_name}` : 'Add a task', `
+    <div class="form-grid">
+      <div class="span2">${field('item_name', 'Task', input(`value="${esc(existing?.item_name || '')}" placeholder="Clean gutters, service generator…"`))}</div>
+      ${field('due_date', 'Due', input(`type="date" value="${existing?.due_date || ''}"`))}
+      ${field('priority', 'Priority', select(['standard', 'urgent', 'planning'].map((p) =>
+        ({ value: p, label: p, selected: existing?.priority === p }))))}
+      ${field('repeat_value', 'Repeats every…', input(`type="number" step="1" min="1" value="${existing?.repeat_value ?? ''}" placeholder="leave blank for one-time" data-number`))}
+      ${field('repeat_unit', '…unit', select([{ value: '', label: '—' }, ...['months', 'years', 'days'].map((u) =>
+        ({ value: u, label: u, selected: existing?.repeat_unit === u }))]))}
+      ${field('system_id', 'System', select([{ value: '', label: '— none —' },
+        ...r.systems.map((s) => ({ value: s.id, label: s.system_name, selected: existing?.system_id === s.id }))], 'data-number'))}
+      ${field('equipment_id', 'Equipment', select([{ value: '', label: '— none —' },
+        ...r.equipment.map((e) => ({ value: e.id, label: e.name, selected: existing?.equipment_id === e.id }))], 'data-number'))}
+      ${field('est_cost_low', 'Est. cost low ($)', input(`type="number" value="${existing?.est_cost_low ?? ''}" data-number`))}
+      ${field('est_cost_high', 'Est. cost high ($)', input(`type="number" value="${existing?.est_cost_high ?? ''}" data-number`))}
+      <div class="span2">${field('deferral_risk', 'Notes (why it matters)', textarea(`rows="2"`))}</div>
+    </div>
+    <div class="form-actions">
+      ${existing ? '<button class="btn btn-danger" id="task-delete">Delete task</button>' : ''}
+      <button class="btn btn-primary" id="task-save">${existing ? 'Save changes' : 'Add task'}</button>
+    </div>`, { wide: true });
+  $('[name=deferral_risk]', m.body).value = existing?.deferral_risk || '';
+  $('#task-save', m.body).addEventListener('click', async () => {
+    const body = formValues(m.body);
+    if (!body.item_name || !body.due_date) return toast('Task name and due date are required', 'err');
+    if (body.repeat_value && !body.repeat_unit) body.repeat_unit = 'months';
+    try {
+      if (existing) await api(`/api/portal/tasks/${existing.id}`, { method: 'PATCH', body });
+      else await api('/api/portal/tasks', { method: 'POST', body });
+      invalidate();
+      toast(existing ? 'Task updated' : 'Task added to your schedule');
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  $('#task-delete', m.body)?.addEventListener('click', async () => {
+    if (!confirm(`Delete "${existing.item_name}"?`)) return;
+    await api(`/api/portal/tasks/${existing.id}`, { method: 'DELETE' });
+    invalidate();
+    toast('Task deleted');
+    m.close(); done();
+  });
+}
+
+// Personal contractor modal.
+function myContractorModal(existing, done) {
+  const m = modal(existing ? `Edit — ${existing.name}` : 'Add a contractor', `
+    <div class="form-grid">
+      ${field('name', 'Name', input(`value="${esc(existing?.name || '')}"`))}
+      ${field('company', 'Company', input(`value="${esc(existing?.company || '')}"`))}
+      ${field('specialty', 'Specialty', input(`value="${esc(existing?.specialty || '')}" placeholder="Plumbing, HVAC, handyman…"`))}
+      ${field('phone', 'Phone', input(`value="${esc(existing?.phone || '')}"`))}
+      ${field('email', 'Email', input(`type="email" value="${esc(existing?.email || '')}"`))}
+      <div class="span2">${field('notes', 'Notes', textarea(`rows="2"`))}</div>
+    </div>
+    <div class="form-actions">
+      ${existing ? '<button class="btn btn-danger" id="mc-remove">Remove from book</button>' : ''}
+      <button class="btn btn-primary" id="mc-save">${existing ? 'Save changes' : 'Add contractor'}</button>
+    </div>`);
+  $('[name=notes]', m.body).value = existing?.notes || '';
+  $('#mc-save', m.body).addEventListener('click', async () => {
+    const body = formValues(m.body);
+    if (!body.name) return toast('Name is required', 'err');
+    try {
+      if (existing) await api(`/api/portal/contractors/${existing.id}`, { method: 'PATCH', body });
+      else await api('/api/portal/contractors', { method: 'POST', body });
+      invalidate();
+      toast('Contractor saved');
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  $('#mc-remove', m.body)?.addEventListener('click', async () => {
+    if (!confirm(`Remove ${existing.name} from your book? Their past services stay in your history.`)) return;
+    await api(`/api/portal/contractors/${existing.id}`, { method: 'PATCH', body: { active: 0 } });
+    invalidate();
+    toast('Contractor removed');
+    m.close(); done();
+  });
+}
+
+// ── Connective tissue: detail panels + link chips ──────────────────────────
+// Everything related to a system / piece of equipment / contractor in one
+// place: open tasks, service history, documents.
+function detailModal(r, kind, id, done) {
+  const refresh = done || (() => {});
+  let title = '', header = '', tasks = [], history = [], docs = [];
+  if (kind === 'system') {
+    const s = r.systems.find((x) => x.id === id);
+    if (!s) return;
+    title = s.system_name;
+    const equip = r.equipment.filter((e) => e.system_id === id);
+    header = `<span class="chip">${esc(s.category)}</span> ${stars(s.condition_rating)}
+      ${s.remaining_life != null ? `<span class="small muted"> · ~${s.remaining_life} yrs left</span>` : ''}
+      ${s.description ? `<div class="small sub" style="margin-top:6px">${esc(s.description)}</div>` : ''}
+      ${equip.length ? `<div style="margin-top:8px">${equip.map((e) => `<span class="chip link-chip" data-detail="equipment:${e.id}">⚙ ${esc(e.name)}</span>`).join('')}</div>` : ''}`;
+    tasks = r.schedule.filter((i) => i.system_id === id);
+    history = r.log.filter((l) => l.system_id === id);
+    docs = r.documents.filter((d) => d.system_id === id);
+  } else if (kind === 'equipment') {
+    const e = r.equipment.find((x) => x.id === id);
+    if (!e) return;
+    title = e.name;
+    header = `${e.system_name ? `<span class="chip link-chip" data-detail="system:${e.system_id}">${esc(e.system_name)}</span>` : '<span class="chip">freestanding</span>'}
+      ${warrantyBadge(e.warranty_status, e.warranty_expiry)}
+      <div class="small sub" style="margin-top:6px">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
+      ${e.warranty_expiry && e.warranty_status === 'active' ? ` · warranty to ${fmtDate(e.warranty_expiry)}` : ''}</div>`;
+    tasks = r.schedule.filter((i) => i.equipment_id === id);
+    history = r.log.filter((l) => l.equipment_id === id);
+    docs = r.documents.filter((d) => d.equipment_id === id);
+  } else if (kind === 'contractor') {
+    const c = r.my_contractors.find((x) => x.id === id);
+    if (!c) return;
+    title = c.name;
+    header = `${c.company ? esc(c.company) + ' · ' : ''}${c.specialty ? `<span class="chip">${esc(c.specialty)}</span>` : ''}
+      <div class="small muted" style="margin-top:4px">${[c.phone, c.email].filter(Boolean).map(esc).join(' · ')}</div>
+      ${c.notes ? `<div class="small sub" style="margin-top:4px">${esc(c.notes)}</div>` : ''}`;
+    history = r.log.filter((l) => l.client_contractor_id === id);
+    docs = r.documents.filter((d) => history.some((l) => l.id === d.maintenance_log_id));
+  }
+
+  const m = modal(title, `
+    <div>${header}</div>
+    ${tasks.length ? `<hr class="divider"><h3>Open tasks</h3>
+      ${tasks.map((i) => `<div class="item-line small">${priorityBadge(i.priority, i.overdue)}
+        <b>${esc(i.item_name)}</b><span class="right muted">${dueText(i.due_date)}</span></div>`).join('')}` : ''}
+    <hr class="divider"><h3>Service history (${history.length})</h3>
+    ${history.map((l) => {
+      const attached = r.documents.filter((d) => d.maintenance_log_id === l.id);
+      return `<div class="item-line small" style="align-items:flex-start">
+        <span style="white-space:nowrap" class="muted">${fmtDate(l.date)}</span>
+        <div>${esc(l.description)}
+          ${attached.map((d) => ` <a href="/api/documents/${d.id}/file" target="_blank">📎${esc(d.document_name)}</a>`).join('')}
+          <br><span class="muted">${esc(l.my_contractor_name || l.contractor_name || l.performed_by || '')}</span></div>
+        <span class="right muted">${money(l.invoice_amount)}</span>
+      </div>`;
+    }).join('') || empty('No services recorded yet.')}
+    ${kind !== 'contractor' ? `<hr class="divider"><h3>Documents (${docs.length})</h3>
+      ${docs.map((d) => `<div class="item-line small"><span class="chip">${label(d.document_type)}</span>
+        <a href="/api/documents/${d.id}/file" target="_blank">${esc(d.document_name)}</a>
+        <span class="right muted">${fmtDate(d.upload_date)}</span></div>`).join('') || empty('No documents linked.')}` : ''}
+  `, { wide: true });
+  bindDetailLinks(m.body, r, refresh);
+}
+
+function bindDetailLinks(root, r, done) {
+  for (const chip of $$('[data-detail]', root)) {
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const [kind, id] = chip.dataset.detail.split(':');
+      detailModal(r, kind, Number(id), done);
+    });
+  }
+}
+
+// ── AI suggestions (system/equipment modals) ──────────────────────────────
+// Fetches a drafted description + proposed maintenance tasks. Description
+// fills the form; tasks are accepted per-checkbox (saving the item first if
+// it's new, so tasks have something to link to).
+function bindSuggest(m, r, kind, existing, saveItem, done) {
+  $('#sg-btn', m.body)?.addEventListener('click', async () => {
+    const btn = $('#sg-btn', m.body);
+    btn.disabled = true;
+    btn.textContent = 'Thinking…';
+    try {
+      const v = formValues(m.body);
+      const sg = await api('/api/portal/suggest', { method: 'POST', body: {
+        kind, name: v.system_name || v.name, category: v.category,
+        make: v.make, model_number: v.model_number, install_date: v.install_date,
+        age_at_intake: v.age_at_intake, expected_lifespan: v.expected_lifespan,
+      } });
+      const panel = $('#sg-panel', m.body);
+      panel.style.display = 'block';
+      panel.innerHTML = `
+        <h4>${sg.source === 'ai' ? '✨ AI suggestions' : 'Suggestions from the maintenance library'}</h4>
+        ${sg.description ? `<div class="small" style="margin-bottom:6px"><i>${esc(sg.description)}</i>
+          <button type="button" class="btn btn-sm" id="sg-use-desc" style="margin-left:6px">Use as description</button></div>` : ''}
+        ${sg.tasks.length ? `
+          ${sg.tasks.map((t, i) => `<label class="checkbox-row" style="align-items:flex-start">
+            <input type="checkbox" data-sg-task="${i}" checked style="margin-top:3px">
+            <span><b>${esc(t.task_name)}</b>
+              <span class="small muted">— ${t.interval_months ? `every ${t.interval_months} mo` : 'one-time'}
+              · ${label(t.priority)}${t.est_cost_high ? ` · ~${money(t.est_cost_low)}–${money(t.est_cost_high)}` : ''}</span>
+              ${t.note ? `<br><span class="small muted">${esc(t.note)}</span>` : ''}</span>
+          </label>`).join('')}
+          <button type="button" class="btn btn-primary btn-sm" id="sg-add-tasks">Save & add selected tasks</button>`
+          : '<div class="small muted">No task suggestions for this category.</div>'}`;
+      $('#sg-use-desc', panel)?.addEventListener('click', () => {
+        const descField = $('[name=description]', m.body);
+        if (descField) descField.value = sg.description;
+        toast('Description filled in — save to keep it');
+      });
+      $('#sg-add-tasks', panel)?.addEventListener('click', async () => {
+        const picked = $$('[data-sg-task]:checked', panel).map((cb) => sg.tasks[Number(cb.dataset.sgTask)]);
+        if (!picked.length) return toast('Nothing selected', 'err');
+        try {
+          const itemId = await saveItem(); // creates or updates; returns id
+          const t0 = new Date();
+          for (const t of picked) {
+            const due = new Date(t0.getTime() + Math.max(t.interval_months || 0.5, 0.5) * 30.44 * 86400000);
+            await api('/api/portal/tasks', { method: 'POST', body: {
+              item_name: t.task_name,
+              due_date: due.toISOString().slice(0, 10),
+              priority: t.priority,
+              deferral_risk: t.note || null,
+              est_cost_low: t.est_cost_low, est_cost_high: t.est_cost_high,
+              repeat_value: t.interval_months || null,
+              repeat_unit: t.interval_months ? 'months' : null,
+              ...(kind === 'system' ? { system_id: itemId } : { equipment_id: itemId }),
+            } });
+          }
+          invalidate();
+          toast(`Saved — ${picked.length} task(s) added to your schedule`);
+          m.close(); done();
+        } catch (err) { toast(err.message, 'err'); }
+      });
+    } catch (err) {
+      toast(err.message, 'err');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '✨ Suggest schedule & description';
+    }
   });
 }
 
@@ -303,20 +626,29 @@ async function loadRequests(view) {
 function itemLine(i, selfServe = false) {
   return `<div class="item-line" style="align-items:flex-start">
     ${priorityBadge(i.priority, i.overdue)}
-    <div><b>${esc(i.item_name)}</b>${i.system_name ? ` <span class="small muted">· ${esc(i.system_name)}</span>` : ''}
+    <div><b>${esc(i.item_name)}</b>
+      ${i.system_name ? ` <span class="chip link-chip small" data-detail="system:${i.system_id}">${esc(i.system_name)}</span>` : ''}
+      ${i.equipment_name ? ` <span class="chip link-chip small" data-detail="equipment:${i.equipment_id}">⚙ ${esc(i.equipment_name)}</span>` : ''}
+      ${i.custom ? `<span class="chip">yours${i.repeat_value ? ` · every ${i.repeat_value} ${i.repeat_unit}` : ''}</span>` : ''}
       ${i.deferral_risk ? `<br><span class="small muted">${esc(i.deferral_risk)}</span>` : ''}
       ${i.contractor_name ? `<br><span class="small muted">Assigned: ${esc(i.contractor_name)}</span>` : ''}</div>
     <span class="right" style="white-space:nowrap"><b>${dueText(i.due_date)}</b><br>
       <span class="small muted">${moneyRange(i.est_cost_low, i.est_cost_high)}</span>
-      ${selfServe ? `<br><button class="btn btn-sm" data-done="${i.id}" style="margin-top:4px">Mark done</button>` : ''}</span>
+      ${selfServe ? `<br><button class="btn btn-sm" data-done="${i.id}" style="margin-top:4px">Mark done</button>
+        ${i.custom ? `<button class="btn btn-sm" data-task-edit="${i.id}" style="margin-top:4px">Edit</button>` : ''}` : ''}</span>
   </div>`;
 }
 
 function bindMarkDone(view, r, refresh) {
   for (const b of $$('[data-done]', view)) {
     b.addEventListener('click', () =>
-      serviceModal(r, r.schedule.find((i) => i.id === Number(b.dataset.done)), refresh));
+      serviceModal(r, { forwardItem: r.schedule.find((i) => i.id === Number(b.dataset.done)) }, refresh));
   }
+  for (const b of $$('[data-task-edit]', view)) {
+    b.addEventListener('click', () =>
+      taskModal(r, r.schedule.find((i) => i.id === Number(b.dataset.taskEdit)), refresh));
+  }
+  bindDetailLinks(view, r, refresh);
 }
 
 // ── Calendar (US-C1: 12-month forward view) ────────────────────────────────
@@ -336,6 +668,8 @@ export async function renderCalendar(view) {
   const line = (i) => itemLine(i, r.self_serve);
   view.innerHTML = `
   ${head(r, 'Maintenance Calendar', `${within.length} items over the next 12 months`)}
+  ${r.self_serve ? `<div style="margin-bottom:16px"><button class="btn btn-primary" id="task-add">+ Add a task</button>
+    <span class="small muted" style="margin-left:8px">your own to-dos, one-time or repeating — alongside what the engine schedules</span></div>` : ''}
   ${overdue.length ? `<div class="section"><div class="section-head"><h2>Past due</h2></div>
     <div class="card card-pad">${overdue.map(line).join('')}</div></div>` : ''}
   ${months.map((ym) => {
@@ -345,6 +679,7 @@ export async function renderCalendar(view) {
       <div class="card card-pad">${items.map(line).join('')}</div></div>`;
   }).join('') || `<div class="card section">${empty('Nothing scheduled in the next 12 months.')}</div>`}
   <div class="disclaimer">${esc(r.disclaimer)}</div>`;
+  $('#task-add', view)?.addEventListener('click', () => taskModal(r, null, () => renderCalendar(view)));
   bindMarkDone(view, r, () => renderCalendar(view));
 }
 
@@ -388,7 +723,8 @@ export async function renderSystems(view) {
           ${r.self_serve ? `<span class="right"><button class="btn btn-sm" data-pe-edit="${e.id}">Edit</button></span>` : ''}
         </div>`).join('')}
       </div>` : ''}
-      ${r.self_serve ? `<div style="margin-top:10px"><button class="btn btn-sm" data-ss-edit="${s.id}">Edit</button></div>` : ''}
+      <div style="margin-top:10px"><button class="btn btn-sm" data-detail="system:${s.id}">History & documents</button>
+      ${r.self_serve ? `<button class="btn btn-sm" data-ss-edit="${s.id}">Edit</button>` : ''}</div>
     </div>`; }).join('') || `<div class="card">${empty('No systems yet — add the first one.')}</div>`}
   </div>
   ${(() => {
@@ -418,6 +754,7 @@ export async function renderSystems(view) {
         selfEquipmentModal(r, r.equipment.find((e) => e.id === Number(b.dataset.peEdit)), refresh));
     }
   }
+  bindDetailLinks(view, r, () => renderSystems(view));
 }
 
 // ── History (US-C2: the home's medical record) ─────────────────────────────
@@ -427,22 +764,40 @@ export async function renderHistory(view) {
   const total = r.log.reduce((sum, l) => sum + (l.invoice_amount || 0), 0);
   const docsByLog = {};
   for (const doc of r.documents) if (doc.maintenance_log_id) (docsByLog[doc.maintenance_log_id] ??= []).push(doc);
-  view.innerHTML = `
-  ${head(r, 'Maintenance History', `${r.log.length} jobs on record · ${money(total)} total invested`)}
-  ${r.self_serve ? `<div style="margin-bottom:16px"><button class="btn btn-primary" id="svc-add">+ Log service</button></div>` : ''}
+  const performerCell = (l) => l.my_contractor_name
+    ? `<span class="chip link-chip" data-detail="contractor:${l.client_contractor_id}">${esc(l.my_contractor_name)}</span>`
+    : esc(l.contractor_name || l.performed_by || '—');
+  const sysChips = (l) => `${l.system_name ? `<span class="chip link-chip" data-detail="system:${l.system_id}">${esc(l.system_name)}</span>` : '—'}
+    ${l.equipment_name ? `<span class="chip link-chip" data-detail="equipment:${l.equipment_id}">⚙ ${esc(l.equipment_name)}</span>` : ''}`;
+
+  const tableHtml = `
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Date</th><th>Work performed</th><th>System / Equipment</th><th>Performed by</th><th class="num">Cost</th></tr></thead>
+      <thead><tr><th>Date</th><th>Work performed</th><th>System / Equipment</th><th>Performed by</th><th class="num">Cost</th>${r.self_serve ? '<th></th>' : ''}</tr></thead>
       <tbody>${r.log.map((l) => `<tr>
         <td style="white-space:nowrap">${fmtDate(l.date)}</td>
         <td>${esc(l.description)}${l.outcome_notes ? `<br><span class="small muted">${esc(l.outcome_notes)}</span>` : ''}
           ${(docsByLog[l.id] || []).map((doc) => `<br><a class="small" href="/api/documents/${doc.id}/file" target="_blank">📎 ${esc(doc.document_name)}</a>`).join('')}</td>
-        <td>${esc(l.system_name || '—')}${l.equipment_name ? `<br><span class="chip">${esc(l.equipment_name)}</span>` : ''}</td>
-        <td>${esc(l.contractor_name || l.performed_by || '—')}</td>
+        <td>${sysChips(l)}</td>
+        <td>${performerCell(l)}</td>
         <td class="num">${money(l.invoice_amount)}</td>
-      </tr>`).join('') || `<tr><td colspan="5">${empty('No work logged yet.')}</td></tr>`}</tbody>
+        ${r.self_serve ? `<td><button class="btn btn-sm" data-svc-edit="${l.id}">Edit</button></td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="6">${empty('No work logged yet.')}</td></tr>`}</tbody>
     </table>
+  </div>`;
+
+  const timelineHtml = buildTimeline(r, docsByLog);
+
+  view.innerHTML = `
+  ${head(r, 'Maintenance History', `${r.log.length} jobs on record · ${money(total)} total invested`)}
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+    ${r.self_serve ? `<button class="btn btn-primary" id="svc-add">+ Log service</button>` : ''}
+    <span class="right" style="margin-left:auto">
+      <button class="btn btn-sm ${historyMode === 'timeline' ? 'btn-primary' : ''}" data-hmode="timeline">Timeline</button>
+      <button class="btn btn-sm ${historyMode === 'table' ? 'btn-primary' : ''}" data-hmode="table">Table</button>
+    </span>
   </div>
+  ${historyMode === 'timeline' ? timelineHtml : tableHtml}
   ${r.permits.length ? `
   <div class="section"><div class="section-head"><h2>Permit history</h2></div>
   <div class="table-wrap"><table>
@@ -453,7 +808,70 @@ export async function renderHistory(view) {
       <td>${esc(pm.scope_description || '')}${pm.gap_notes ? `<br><span class="small muted">${esc(pm.gap_notes)}</span>` : ''}</td>
     </tr>`).join('')}</tbody></table></div></div>` : ''}`;
 
-  $('#svc-add', view)?.addEventListener('click', () => serviceModal(r, null, () => renderHistory(view)));
+  const refresh = () => renderHistory(view);
+  $('#svc-add', view)?.addEventListener('click', () => serviceModal(r, {}, refresh));
+  for (const b of $$('[data-hmode]', view)) {
+    b.addEventListener('click', () => { historyMode = b.dataset.hmode; renderHistory(view); });
+  }
+  for (const b of $$('[data-svc-edit]', view)) {
+    b.addEventListener('click', () =>
+      serviceModal(r, { existing: r.log.find((l) => l.id === Number(b.dataset.svcEdit)) }, refresh));
+  }
+  bindDetailLinks(view, r, refresh);
+}
+
+let historyMode = 'timeline';
+
+// The home's life as one stream: services, documents added, tasks completed,
+// and milestones — grouped by year, newest first.
+function buildTimeline(r, docsByLog) {
+  const events = [];
+  const completedByLog = new Set(r.completed_tasks.filter((ct) => ct.maintenance_log_id).map((ct) => ct.maintenance_log_id));
+  for (const l of r.log) {
+    events.push({ date: l.date, cls: '', html: `
+      <b>${esc(l.description)}</b>
+      ${completedByLog.has(l.id) ? '<span class="badge b-good">task completed</span>' : ''}
+      ${r.self_serve ? `<button class="btn btn-sm" data-svc-edit="${l.id}" style="float:right">Edit</button>` : ''}
+      <div class="small muted" style="margin-top:3px">
+        ${l.my_contractor_name ? `<span class="chip link-chip" data-detail="contractor:${l.client_contractor_id}">${esc(l.my_contractor_name)}</span>` : esc(l.contractor_name || l.performed_by || '')}
+        ${l.system_name ? `<span class="chip link-chip" data-detail="system:${l.system_id}">${esc(l.system_name)}</span>` : ''}
+        ${l.equipment_name ? `<span class="chip link-chip" data-detail="equipment:${l.equipment_id}">⚙ ${esc(l.equipment_name)}</span>` : ''}
+        ${l.invoice_amount != null ? ` · ${money(l.invoice_amount)}` : ''}
+      </div>
+      ${(docsByLog[l.id] || []).map((doc) => `<a class="small" href="/api/documents/${doc.id}/file" target="_blank">📎 ${esc(doc.document_name)}</a> `).join('')}` });
+  }
+  for (const doc of r.documents) {
+    if (doc.maintenance_log_id) continue; // shown with its service
+    if (!doc.upload_date) continue;
+    events.push({ date: doc.upload_date, cls: 'tl-doc', html: `
+      <span class="chip">${label(doc.document_type)}</span>
+      <a href="/api/documents/${doc.id}/file" target="_blank"><b>${esc(doc.document_name)}</b></a> added
+      ${doc.system_name ? `<span class="chip link-chip" data-detail="system:${doc.system_id}">${esc(doc.system_name)}</span>` : ''}
+      ${doc.equipment_name ? `<span class="chip link-chip" data-detail="equipment:${doc.equipment_id}">⚙ ${esc(doc.equipment_name)}</span>` : ''}` });
+  }
+  for (const ct of r.completed_tasks) {
+    if (ct.maintenance_log_id) continue; // its service entry carries the story
+    events.push({ date: ct.completed_date, cls: 'tl-task', html: `
+      <span class="badge b-good">✓ done</span> <b>${esc(ct.item_name)}</b>
+      ${ct.system_name ? `<span class="chip link-chip" data-detail="system:${ct.system_id}">${esc(ct.system_name)}</span>` : ''}` });
+  }
+  if (r.property.ownership_date) {
+    events.push({ date: r.property.ownership_date, cls: 'tl-milestone', html: `<b>🏠 Purchased the home</b>` });
+  }
+  if (r.property.intake_date) {
+    events.push({ date: r.property.intake_date, cls: 'tl-milestone', html: `<b>📖 Home Record started</b>` });
+  }
+  events.sort((a, b) => b.date.localeCompare(a.date));
+  if (!events.length) return `<div class="card">${empty('Nothing on the timeline yet.')}</div>`;
+
+  let html = '<div class="tl">';
+  let year = null;
+  for (const ev of events) {
+    const y = ev.date.slice(0, 4);
+    if (y !== year) { year = y; html += `<div class="tl-year">${y}</div>`; }
+    html += `<div class="tl-item ${ev.cls}"><div class="tl-date">${fmtDate(ev.date)}</div><div class="tl-body">${ev.html}</div></div>`;
+  }
+  return html + '</div>';
 }
 
 // ── Capital forecast (US-C3, tier-gated) ───────────────────────────────────
@@ -496,6 +914,42 @@ export async function renderForecast(view) {
 export async function renderContractors(view) {
   const r = await record();
   if (needsOnboarding(r)) return renderOnboarding(view, r);
+
+  // Self-serve: a personal contractor book they maintain themselves.
+  if (r.self_serve) {
+    const refresh = () => renderContractors(view);
+    view.innerHTML = `
+    ${head(r, 'My Contractors', 'Your own book — the people you hire, and everything they’ve done for you')}
+    <div style="margin-bottom:16px"><button class="btn btn-primary" id="mc-add">+ Add a contractor</button></div>
+    <div class="grid g2">
+      ${r.my_contractors.map((c) => `
+      <div class="card card-pad">
+        <div style="display:flex;justify-content:space-between;gap:8px">
+          <div><h3>${esc(c.name)}</h3>
+            <div class="sub">${esc(c.company || '')}</div></div>
+          ${c.specialty ? `<span class="chip">${esc(c.specialty)}</span>` : ''}
+        </div>
+        <dl class="kv small" style="margin-top:8px">
+          ${c.phone ? `<dt>Phone</dt><dd><a href="tel:${esc(c.phone)}">${esc(c.phone)}</a></dd>` : ''}
+          ${c.email ? `<dt>Email</dt><dd><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></dd>` : ''}
+          <dt>Services</dt><dd>${c.service_count} on record</dd>
+        </dl>
+        ${c.notes ? `<div class="small muted" style="margin-top:6px">${esc(c.notes)}</div>` : ''}
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button class="btn btn-sm" data-detail="contractor:${c.id}">Service history</button>
+          <button class="btn btn-sm" data-mc-edit="${c.id}">Edit</button>
+        </div>
+      </div>`).join('') || `<div class="card">${empty('No contractors in your book yet — add the first one.')}</div>`}
+    </div>`;
+    $('#mc-add', view).addEventListener('click', () => myContractorModal(null, refresh));
+    for (const b of $$('[data-mc-edit]', view)) {
+      b.addEventListener('click', () =>
+        myContractorModal(r.my_contractors.find((c) => c.id === Number(b.dataset.mcEdit)), refresh));
+    }
+    bindDetailLinks(view, r, refresh);
+    return;
+  }
+
   view.innerHTML = `
   ${head(r, 'Your Home’s Contractors', 'The vetted professionals who work on your home')}
   <div class="grid g2">
@@ -528,7 +982,7 @@ export async function renderDocuments(view) {
         <input type="file" id="up-file" class="control" style="max-width:250px"></label>
       <label class="field" style="margin:0"><span class="field-label">Type</span>
         <select id="up-type" class="control" style="max-width:150px">
-          ${['photo', 'invoice', 'warranty', 'permit_doc', 'inspection_report', 'other'].map((t) => `<option>${t}</option>`).join('')}
+          ${['photo', 'receipt', 'invoice', 'quote', 'contract', 'warranty', 'permit_doc', 'inspection_report', 'other'].map((t) => `<option>${t}</option>`).join('')}
         </select></label>
       <label class="field" style="margin:0"><span class="field-label">System</span>
         <select id="up-system" class="control" style="max-width:170px"><option value="">—</option>
@@ -543,16 +997,35 @@ export async function renderDocuments(view) {
       <button class="btn btn-primary btn-sm" type="submit">Upload</button>
     </form>
   </div>
+  <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+    <span class="small muted">Filter:</span>
+    <select id="df-type" class="control" style="max-width:150px"><option value="">all types</option>
+      ${[...new Set(r.documents.map((d) => d.document_type))].map((t) => `<option value="${t}" ${docFilter.type === t ? 'selected' : ''}>${label(t)}</option>`).join('')}
+    </select>
+    <select id="df-system" class="control" style="max-width:180px"><option value="">all systems</option>
+      ${r.systems.map((s) => `<option value="${s.id}" ${docFilter.system === String(s.id) ? 'selected' : ''}>${esc(s.system_name)}</option>`).join('')}
+    </select>
+    <select id="df-equipment" class="control" style="max-width:180px"><option value="">all equipment</option>
+      ${r.equipment.map((e) => `<option value="${e.id}" ${docFilter.equipment === String(e.id) ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}
+    </select>
+  </div>
   <div class="card card-pad">
-    ${r.documents.length ? r.documents.map((doc) => `
+    ${(() => {
+      const filtered = r.documents.filter((d) =>
+        (!docFilter.type || d.document_type === docFilter.type)
+        && (!docFilter.system || String(d.system_id) === docFilter.system)
+        && (!docFilter.equipment || String(d.equipment_id) === docFilter.equipment));
+      return filtered.length ? filtered.map((doc) => `
       <div class="item-line">
         <span class="chip">${label(doc.document_type)}</span>
         <div><a href="/api/documents/${doc.id}/file" target="_blank"><b>${esc(doc.document_name)}</b></a>
-          ${doc.system_name ? `<span class="chip">${esc(doc.system_name)}</span>` : ''}
-          ${doc.equipment_name ? `<span class="chip">⚙ ${esc(doc.equipment_name)}</span>` : ''}
+          ${doc.system_name ? `<span class="chip link-chip" data-detail="system:${doc.system_id}">${esc(doc.system_name)}</span>` : ''}
+          ${doc.equipment_name ? `<span class="chip link-chip" data-detail="equipment:${doc.equipment_id}">⚙ ${esc(doc.equipment_name)}</span>` : ''}
+          ${doc.maintenance_log_id ? `<span class="chip">🔧 service</span>` : ''}
           <br><span class="small muted">${doc.description ? esc(doc.description) + ' · ' : ''}${fmtDate(doc.upload_date)}</span></div>
         <span class="right small muted">${doc.size_bytes ? Math.ceil(doc.size_bytes / 1024) + ' KB' : ''}</span>
-      </div>`).join('') : empty('No documents yet — upload the first one.')}
+      </div>`).join('') : empty(r.documents.length ? 'Nothing matches these filters.' : 'No documents yet — upload the first one.');
+    })()}
   </div>
   <div class="card card-pad section" style="max-width:640px">
     <h3>Your record belongs to you</h3>
@@ -581,4 +1054,10 @@ export async function renderDocuments(view) {
     toast('Added to your Home Record');
     renderDocuments(view);
   });
+  for (const [key, sel] of [['type', '#df-type'], ['system', '#df-system'], ['equipment', '#df-equipment']]) {
+    $(sel, view)?.addEventListener('change', (e) => { docFilter[key] = e.target.value; renderDocuments(view); });
+  }
+  bindDetailLinks(view, r, () => renderDocuments(view));
 }
+
+let docFilter = { type: '', system: '', equipment: '' };

@@ -229,6 +229,26 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .cal-month { margin-bottom: 18px; }
 .cal-month h3 { font-size: 15px; color: var(--ink-2); margin-bottom: 8px; letter-spacing: .04em; }
 
+/* ── timeline ──────────────────────────────────────────────────────── */
+.tl { position: relative; padding-left: 26px; }
+.tl::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: var(--hairline-2); }
+.tl-year { font: 400 22px var(--serif); margin: 22px 0 10px; position: relative; }
+.tl-item { position: relative; padding: 8px 0 8px 6px; }
+.tl-item::before {
+  content: ''; position: absolute; left: -24px; top: 15px; width: 10px; height: 10px;
+  border-radius: 50%; background: var(--surface); border: 2px solid var(--brand);
+}
+.tl-item.tl-doc::before { border-color: var(--accent); }
+.tl-item.tl-task::before { border-color: var(--info); }
+.tl-item.tl-milestone::before { background: var(--brand); }
+.tl-date { font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
+.tl-body { background: var(--surface); border: 1px solid var(--hairline); border-radius: 8px; padding: 10px 14px; margin-top: 3px; box-shadow: var(--shadow); }
+.link-chip { cursor: pointer; }
+.link-chip:hover { border-color: var(--brand); color: var(--brand); }
+.doc-file-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.suggest-panel { background: var(--brand-soft); border: 1px solid #ccdad2; border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
+.suggest-panel h4 { font: 600 12px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--brand); margin-bottom: 8px; }
+
 @media (max-width: 720px) {
   main { padding: 20px 14px 60px; }
   .topbar { padding: 0 14px; gap: 12px; overflow-x: auto; }

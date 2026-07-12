@@ -7,6 +7,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { open, audit, today, FILES_DIR } = require('./db');
 const rulesEngine = require('./rules-engine');
+const { suggest } = require('./suggest');
 const { SYSTEM_CATEGORIES, TIERS, SCOPE_DISCLAIMER } = require('./vocab');
 const { sendJson, sendError, readJson, readBody, pick, MAX_FILE_BODY } = require('./http-util');
 
@@ -20,10 +21,12 @@ const VISIBLE = {
     'model_number','warranty_expiry','last_service_date','age_years','remaining_life'],
   equipment: ['id','system_id','system_name','name','description','make','model_number','serial_number',
     'install_date','expected_lifespan','warranty_expiry','condition_rating','age_years','remaining_life','warranty_status'],
-  schedule: ['id','item_name','system_id','system_name','due_date','due_window','priority','status',
-    'est_cost_low','est_cost_high','capital_forecast_item','completed_date','deferral_risk','contractor_name','overdue'],
+  schedule: ['id','item_name','system_id','system_name','equipment_id','equipment_name','due_date','due_window',
+    'priority','status','est_cost_low','est_cost_high','capital_forecast_item','completed_date','deferral_risk',
+    'contractor_name','overdue','custom','repeat_value','repeat_unit'],
   log: ['id','system_id','system_name','equipment_id','equipment_name','date','description','contractor_name',
-    'performed_by','invoice_amount','outcome_notes'],
+    'performed_by','client_contractor_id','my_contractor_name','invoice_amount','outcome_notes'],
+  my_contractor: ['id','name','company','specialty','phone','email','notes'],
   permit: ['id','permit_number','date_filed','date_finaled','status','permit_type','scope_description',
     'contractor_of_record','final_inspection_passed','gap_flag','gap_notes'],
   visit: ['id','visit_date','visit_type','advisor_name','systems_reviewed','findings_summary'],
@@ -80,20 +83,37 @@ function buildPortalRecord(client, property) {
     }, VISIBLE.equipment));
 
   const schedule = db.prepare(
-    `SELECT f.*, s.system_name, ct.company_name AS contractor_name
+    `SELECT f.*, s.system_name, e.name AS equipment_name, ct.company_name AS contractor_name
      FROM forward_schedule f LEFT JOIN systems s ON s.id = f.system_id
+     LEFT JOIN equipment e ON e.id = f.equipment_id
      LEFT JOIN contractors ct ON ct.id = f.assigned_contractor_id
      WHERE f.property_id = ? AND f.status IN ('upcoming','scheduled')
      ORDER BY f.due_date`).all(pid)
     .map((it) => pick({ ...it, overdue: it.due_date && it.due_date < t ? 1 : 0 }, VISIBLE.schedule));
 
+  // Closed tasks feed the timeline view.
+  const completedTasks = db.prepare(
+    `SELECT f.id, f.item_name, f.completed_date, f.maintenance_log_id, s.system_name, e.name AS equipment_name
+     FROM forward_schedule f LEFT JOIN systems s ON s.id = f.system_id
+     LEFT JOIN equipment e ON e.id = f.equipment_id
+     WHERE f.property_id = ? AND f.status = 'completed' AND f.completed_date IS NOT NULL
+     ORDER BY f.completed_date DESC LIMIT 300`).all(pid);
+
   const log = db.prepare(
-    `SELECT l.*, s.system_name, e.name AS equipment_name, ct.company_name AS contractor_name
+    `SELECT l.*, s.system_name, e.name AS equipment_name, ct.company_name AS contractor_name,
+            cc.name AS my_contractor_name
      FROM maintenance_log l LEFT JOIN systems s ON s.id = l.system_id
      LEFT JOIN equipment e ON e.id = l.equipment_id
      LEFT JOIN contractors ct ON ct.id = l.contractor_id
+     LEFT JOIN client_contractors cc ON cc.id = l.client_contractor_id
      WHERE l.property_id = ? ORDER BY l.date DESC`).all(pid)
     .map((r) => pick(r, VISIBLE.log));
+
+  // Self-serve personal contractor book, with how many services each performed.
+  const myContractors = db.prepare(
+    `SELECT cc.*, (SELECT COUNT(*) FROM maintenance_log l WHERE l.client_contractor_id = cc.id) AS service_count
+     FROM client_contractors cc WHERE cc.client_id = ? AND cc.active = 1 ORDER BY cc.name`).all(client.id)
+    .map((c) => ({ ...pick(c, VISIBLE.my_contractor), service_count: c.service_count }));
 
   const permits = db.prepare('SELECT * FROM permits WHERE property_id = ? ORDER BY date_filed DESC').all(pid)
     .map((r) => pick(r, VISIBLE.permit));
@@ -153,6 +173,8 @@ function buildPortalRecord(client, property) {
     disclaimer: SCOPE_DISCLAIMER,
     today: t,
     equipment,
+    completed_tasks: completedTasks,
+    my_contractors: myContractors,
   };
 }
 
@@ -377,17 +399,35 @@ route('POST', /^\/api\/portal\/service$/, async (req, res, { session }) => {
     if (!['upcoming', 'scheduled'].includes(forwardItem.status)) return sendError(res, 409, 'That item is already closed');
   }
 
+  assertOwnMyContractor(db, client, body.client_contractor_id);
+
   const logId = db.prepare(
-    `INSERT INTO maintenance_log (property_id, system_id, equipment_id, date, description, invoice_amount, performed_by, outcome_notes)
-     VALUES (?,?,?,?,?,?,?,?)`
+    `INSERT INTO maintenance_log (property_id, system_id, equipment_id, date, description, invoice_amount, performed_by, client_contractor_id, outcome_notes)
+     VALUES (?,?,?,?,?,?,?,?,?)`
   ).run(property.id, body.system_id ?? forwardItem?.system_id ?? null, body.equipment_id ?? null,
-    body.date, body.description, body.invoice_amount ?? null, body.performed_by ?? null, body.outcome_notes ?? null).lastInsertRowid;
+    body.date, body.description, body.invoice_amount ?? null, body.performed_by ?? null,
+    body.client_contractor_id ?? null, body.outcome_notes ?? null).lastInsertRowid;
   audit('client', client.id, 'create', 'maintenance_log', logId, body.description.slice(0, 80));
 
+  let nextOccurrence = null;
   if (forwardItem) {
     db.prepare(`UPDATE forward_schedule SET status = 'completed', completed_date = ?, maintenance_log_id = ? WHERE id = ?`)
       .run(body.date, logId, forwardItem.id);
     audit('client', client.id, 'update', 'forward_schedule', forwardItem.id, 'completed via portal service log');
+
+    // Custom repeating tasks schedule their next occurrence on completion.
+    if (forwardItem.custom && forwardItem.repeat_value && forwardItem.repeat_unit) {
+      const nextDue = addToDate(body.date, forwardItem.repeat_value, forwardItem.repeat_unit);
+      nextOccurrence = db.prepare(
+        `INSERT INTO forward_schedule (item_name, property_id, system_id, equipment_id, due_date, due_window,
+           priority, status, est_cost_low, est_cost_high, deferral_risk, custom, repeat_value, repeat_unit)
+         VALUES (?,?,?,?,?,?,?, 'upcoming', ?,?,?,1,?,?)`
+      ).run(forwardItem.item_name, property.id, forwardItem.system_id, forwardItem.equipment_id,
+        nextDue, rulesEngine.dueWindowFor(nextDue), forwardItem.priority,
+        forwardItem.est_cost_low, forwardItem.est_cost_high, forwardItem.deferral_risk,
+        forwardItem.repeat_value, forwardItem.repeat_unit).lastInsertRowid;
+      audit('client', client.id, 'create', 'forward_schedule', nextOccurrence, 'next occurrence of repeating custom task');
+    }
   }
   const systemId = body.system_id ?? forwardItem?.system_id;
   if (systemId) db.prepare('UPDATE systems SET last_service_date = ? WHERE id = ?').run(body.date, systemId);
@@ -396,8 +436,194 @@ route('POST', /^\/api\/portal\/service$/, async (req, res, { session }) => {
   sendJson(res, 201, {
     log_id: logId,
     closed_forward_item: forwardItem?.id ?? null,
+    next_occurrence: nextOccurrence,
     next_items_generated: gen.created,
   });
+});
+
+function addToDate(dateStr, value, unit) {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const days = unit === 'years' ? Math.round(value * 365.25)
+    : unit === 'months' ? Math.round(value * 30.44) : value;
+  return new Date(new Date(dateStr + 'T00:00:00Z').getTime() + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+function assertOwnMyContractor(db, client, id) {
+  if (id == null) return;
+  const c = db.prepare('SELECT client_id FROM client_contractors WHERE id = ?').get(id);
+  if (!c || c.client_id !== client.id) {
+    throw Object.assign(new Error('That contractor is not in your book'), { status: 400 });
+  }
+}
+
+// ── Self-Serve: edit & delete service records ──────────────────────────────
+const SERVICE_WRITE = ['date','description','invoice_amount','performed_by','client_contractor_id','outcome_notes',
+  'system_id','equipment_id'];
+
+route('PATCH', /^\/api\/portal\/service\/(\d+)$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM maintenance_log WHERE id = ?').get(id);
+  if (!existing || existing.property_id !== property.id) return sendError(res, 404, 'Not your service record');
+  const body = await readJson(req);
+  assertOwnSystem(db, property, body.system_id);
+  assertOwnEquipment(db, property, body.equipment_id);
+  assertOwnMyContractor(db, client, body.client_contractor_id);
+  const cols = SERVICE_WRITE.filter((c) => body[c] !== undefined);
+  if (!cols.length) return sendError(res, 400, 'Nothing to update');
+  db.prepare(`UPDATE maintenance_log SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+    .run(...cols.map((c) => body[c]), id);
+  audit('client', client.id, 'update', 'maintenance_log', id, cols.join(','));
+  sendJson(res, 200, { updated: id });
+});
+
+route('DELETE', /^\/api\/portal\/service\/(\d+)$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM maintenance_log WHERE id = ?').get(id);
+  if (!existing || existing.property_id !== property.id) return sendError(res, 404, 'Not your service record');
+  // Documents stay (unlinked); a task this service closed stays closed.
+  db.prepare('UPDATE documents SET maintenance_log_id = NULL WHERE maintenance_log_id = ?').run(id);
+  db.prepare('UPDATE forward_schedule SET maintenance_log_id = NULL WHERE maintenance_log_id = ?').run(id);
+  db.prepare('UPDATE contractor_ratings SET maintenance_log_id = NULL WHERE maintenance_log_id = ?').run(id);
+  db.prepare('UPDATE referral_fees SET maintenance_log_id = NULL WHERE maintenance_log_id = ?').run(id);
+  db.prepare('DELETE FROM maintenance_log WHERE id = ?').run(id);
+  audit('client', client.id, 'delete', 'maintenance_log', id, existing.description.slice(0, 80));
+  sendJson(res, 200, { deleted: id });
+});
+
+// ── Self-Serve: personal contractor book ───────────────────────────────────
+const MY_CONTRACTOR_WRITE = ['name','company','specialty','phone','email','notes','active'];
+
+route('POST', /^\/api\/portal\/contractors$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const body = await readJson(req);
+  if (!body.name) return sendError(res, 400, 'Give the contractor a name');
+  const db = open();
+  const cols = MY_CONTRACTOR_WRITE.filter((c) => body[c] !== undefined && body[c] !== null);
+  const id = db.prepare(
+    `INSERT INTO client_contractors (${cols.join(',')}${cols.length ? ',' : ''}client_id) VALUES (${cols.map(() => '?').join(',')}${cols.length ? ',' : ''}?)`
+  ).run(...cols.map((c) => body[c]), client.id).lastInsertRowid;
+  audit('client', client.id, 'create', 'client_contractors', id, body.name);
+  sendJson(res, 201, { id });
+});
+
+route('PATCH', /^\/api\/portal\/contractors\/(\d+)$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM client_contractors WHERE id = ?').get(id);
+  if (!existing || existing.client_id !== client.id) return sendError(res, 404, 'Not your contractor');
+  const body = await readJson(req);
+  const cols = MY_CONTRACTOR_WRITE.filter((c) => body[c] !== undefined);
+  if (!cols.length) return sendError(res, 400, 'Nothing to update');
+  db.prepare(`UPDATE client_contractors SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+    .run(...cols.map((c) => body[c]), id);
+  audit('client', client.id, 'update', 'client_contractors', id, cols.join(','));
+  sendJson(res, 200, { updated: id });
+});
+
+// ── Self-Serve: custom tasks (own maintenance schedule) ────────────────────
+const TASK_WRITE = ['item_name','due_date','priority','system_id','equipment_id','deferral_risk',
+  'est_cost_low','est_cost_high','repeat_value','repeat_unit'];
+
+route('POST', /^\/api\/portal\/tasks$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const body = await readJson(req);
+  if (!body.item_name || !body.due_date) return sendError(res, 400, 'Task name and due date are required');
+  const db = open();
+  assertOwnSystem(db, property, body.system_id);
+  assertOwnEquipment(db, property, body.equipment_id);
+  const id = db.prepare(
+    `INSERT INTO forward_schedule (item_name, property_id, system_id, equipment_id, due_date, due_window,
+       priority, status, est_cost_low, est_cost_high, deferral_risk, custom, repeat_value, repeat_unit)
+     VALUES (?,?,?,?,?,?,?, 'upcoming', ?,?,?,1,?,?)`
+  ).run(body.item_name, property.id, body.system_id ?? null, body.equipment_id ?? null,
+    body.due_date, rulesEngine.dueWindowFor(body.due_date), body.priority ?? 'standard',
+    body.est_cost_low ?? null, body.est_cost_high ?? null, body.deferral_risk ?? null,
+    body.repeat_value ?? null, body.repeat_unit ?? null).lastInsertRowid;
+  audit('client', client.id, 'create', 'forward_schedule', id, `custom task: ${body.item_name}`);
+  sendJson(res, 201, { id });
+});
+
+route('PATCH', /^\/api\/portal\/tasks\/(\d+)$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM forward_schedule WHERE id = ?').get(id);
+  if (!existing || existing.property_id !== property.id) return sendError(res, 404, 'Not your task');
+  if (!existing.custom) return sendError(res, 403, 'Engine-generated tasks are managed by the maintenance engine — mark them done or leave them; only your own tasks are editable');
+  const body = await readJson(req);
+  assertOwnSystem(db, property, body.system_id);
+  assertOwnEquipment(db, property, body.equipment_id);
+  const cols = TASK_WRITE.filter((c) => body[c] !== undefined);
+  if (!cols.length) return sendError(res, 400, 'Nothing to update');
+  db.prepare(`UPDATE forward_schedule SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+    .run(...cols.map((c) => body[c]), id);
+  if (body.due_date) {
+    db.prepare('UPDATE forward_schedule SET due_window = ? WHERE id = ?')
+      .run(rulesEngine.dueWindowFor(body.due_date), id);
+  }
+  audit('client', client.id, 'update', 'forward_schedule', id, cols.join(','));
+  sendJson(res, 200, { updated: id });
+});
+
+// ── AI suggestions (Claude API when configured, rule library otherwise) ───
+// Modest per-client rate limit since the AI path costs real money.
+const suggestUses = new Map(); // client_id -> { count, resetAt }
+function suggestAllowed(clientId) {
+  const now = Date.now();
+  const entry = suggestUses.get(clientId);
+  if (!entry || entry.resetAt < now) {
+    suggestUses.set(clientId, { count: 1, resetAt: now + 60 * 60 * 1000 });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= 30;
+}
+
+route('POST', /^\/api\/portal\/suggest$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  if (!suggestAllowed(client.id)) {
+    return sendError(res, 429, 'Suggestion limit reached for this hour — try again later.');
+  }
+  const body = await readJson(req);
+  if (!body.name && !body.category) return sendError(res, 400, 'Give the item a name or category first');
+  const result = await suggest({
+    kind: body.kind === 'equipment' ? 'equipment' : 'system',
+    name: body.name, category: body.category, make: body.make, model_number: body.model_number,
+    install_date: body.install_date, age_at_intake: body.age_at_intake, expected_lifespan: body.expected_lifespan,
+  }, property);
+  audit('client', client.id, 'create', null, null, `AI suggestion (${result.source}) for ${body.name || body.category}`);
+  sendJson(res, 200, result);
+});
+
+route('DELETE', /^\/api\/portal\/tasks\/(\d+)$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM forward_schedule WHERE id = ?').get(id);
+  if (!existing || existing.property_id !== property.id) return sendError(res, 404, 'Not your task');
+  if (!existing.custom) return sendError(res, 403, 'Only your own tasks can be deleted');
+  db.prepare('DELETE FROM forward_schedule WHERE id = ?').run(id);
+  audit('client', client.id, 'delete', 'forward_schedule', id, existing.item_name);
+  sendJson(res, 200, { deleted: id });
 });
 
 route('GET', /^\/api\/portal\/requests$/, async (req, res, { session }) => {

@@ -47,6 +47,13 @@ checklist for replacing the demo passwords below before exposing it.
 Self-Serve accounts can also be created from the login screen ("Create a
 Self-Serve account") — signup is open, payments are bypassed, and the new
 client builds their own Home Record through guided onboarding (US-S1/S2).
+Self-Serve clients get a personal contractor book, service logging with
+categorized document attachments (quote/invoice/receipt/contract), editable
+service history with a timeline view, their own one-time or repeating tasks
+alongside the engine's schedule, and AI-suggested descriptions and
+maintenance schedules for systems/equipment (set `ANTHROPIC_API_KEY` to
+enable the Claude-powered version; without a key the Suggest button uses the
+built-in rule library).
 
 ## What's implemented
 
@@ -148,6 +155,8 @@ data/              created at runtime: steward.db + uploaded files (gitignored)
 | `PORT` | `8710` | HTTP port |
 | `HOST` | `0.0.0.0` | bind address |
 | `STEWARD_DATA_DIR` | `./data` | database + file storage location |
+| `ANTHROPIC_API_KEY` | *(unset)* | optional — enables Claude-powered suggestions; rule-library fallback without it |
+| `STEWARD_AI_MODEL` | `claude-opus-4-8` | model used for suggestions |
 
 Backups (§8): the database is a single file — snapshot `data/` on any
 schedule (`sqlite3 data/steward.db ".backup ..."` for a hot copy, since WAL

@@ -189,6 +189,11 @@ of equipment. Three ideas stack:
    improves as data grows. The user-facing behavior is identical; only quality
    differs.
 
+> **This dual path is also the business's Free/paid line.** The rule engine
+> (free to run) powers the **Free** tier; the AI-backed path powers the paid
+> tiers (**Auto** and up). See `BUSINESS.md` §5/§7 — no extra code is needed to
+> draw that line; it already exists here.
+
 > **Product framing note:** in the UI this is presented as **Steward's
 > recommendations** — the service, not the mechanism. The Claude integration
 > and fleet logic are implementation details. A planned UI-language pass will
@@ -215,6 +220,51 @@ Renders the complete Home Record as a print-optimized HTML document (print →
 save as PDF), including systems, schedule, full history, permits, and — at
 eligible tiers — the capital forecast. This is the owner's portable,
 transferable artifact and a core data-ownership guarantee.
+
+### 5.7 Address enrichment & permit monitoring (planned — the "Auto" tier)
+
+The highest-leverage planned addition: turn onboarding from "type in your
+house" into "enter your address, confirm the draft." It also *strengthens* the
+data model — public records timestamp system installs, which directly seed the
+schedule.
+
+**Architecture — a pluggable enrichment service run at onboarding**
+(address in → draft Home Record out):
+
+1. **Geocode / normalize** the address (US Census Geocoder — free — or a
+   commercial geocoder).
+2. **Baseline property characteristics** (year built, sq ft, beds/baths,
+   construction type) via one **commercial property-data API** (e.g. ATTOM,
+   Estated, Regrid) — normalized nationwide, per-lookup cost in cents.
+3. **Permits via a city-adapter layer.** One **Socrata** adapter covers many
+   open-data cities at once (Boston's `data.boston.gov`, etc.); an **ArcGIS**
+   adapter covers many more; an **Accela/portal scraper** is a best-effort
+   fallback for the long tail. Start with launch markets (Boston, LA — both
+   publish open permit data).
+4. **LLM extraction pass** (the existing Claude integration, repurposed):
+   normalize messy permit/assessor text ("INSTALL 1 GFWA FURN") into structured
+   `systems`/`permits` rows with categories and **inferred install dates** —
+   which the rules engine turns into a schedule automatically.
+5. **Present as a draft for the owner to confirm/correct** — never auto-commit
+   public data as truth (it's imperfect; confirmation is also good consent
+   optics). Feeds the same tables self-entry produces.
+6. **Cache every lookup** in the DB — which doubles as fleet-corpus growth.
+
+**Permit monitoring** (the recurring hook for Auto): periodically re-query the
+address's civic source and surface new permits ("a new electrical permit was
+pulled on your address"). This is what makes Auto a *recurring* subscription
+rather than a one-time build.
+
+**Honest constraints:** coverage is excellent in metros, sparse in the exurbs
+(design for best-effort + user fill-in); address↔record matching is non-trivial
+(the commercial APIs help); prefer official open-data and licensed APIs over
+scraping, respect ToS/robots, and never scrape Zillow/Redfin; cache
+aggressively to control per-lookup cost. Unpermitted work is invisible in the
+data — which the existing **permit gap-flag** turns into a feature.
+
+**Fits the existing architecture cleanly:** it's a new pre-onboarding module
+that emits the same `properties`/`systems`/`permits` rows the portal already
+consumes; nothing downstream changes.
 
 ---
 
@@ -367,17 +417,26 @@ home including a composite multi-component system).
 
 ## 13. Roadmap / known technical debt
 
+- **Address enrichment + permit monitoring** (§5.7) — the "Auto" tier. Highest
+  business leverage: kills onboarding friction and seeds records from public
+  data. Start with a Boston open-data proof of concept.
+- **Tier rewiring** — bring `server/vocab.js` in line with the target model in
+  `BUSINESS.md` §5: **Free / Auto / Guided / Managed** (+ bespoke Concierge),
+  new prices, and moving the capital-forecast gate to Auto+. The Free/paid
+  recommendation line already exists (§5.4); this is mostly config + gating.
 - **Growth analytics** — the founder console covers operations; funnel, cohort
-  retention, LTV/CAC, and data-asset density reporting are not yet built.
+  retention, LTV/CAC, and data-asset density reporting are not yet built. The
+  instrumentation needed to run the free-first funnel by the numbers.
 - **UI language pass** — present recommendations as "Steward's" rather than
   "AI"/"Claude" (function unchanged; privacy disclosure unchanged).
 - **Privacy hardening** — policy, consent, right-to-be-forgotten purge,
-  encryption at rest (see §7).
+  encryption at rest (see §7). The commercial-enrichment + Anthropic processor
+  relationships must be disclosed.
 - **Migration tooling** — replace the hand-rolled in-place rebuilds before a
   Postgres port.
-- **Guided assessment depth** — turn onboarding into a system-by-system,
-  photo/data-plate-capture walkthrough to raise both completion and data
-  quality.
+- **Guided assessment depth** — make onboarding **address-first** (§5.7), then
+  a system-by-system, photo/data-plate-capture walkthrough to raise both
+  completion and data quality.
 - **Component-level scheduling** — the rules engine currently schedules per
   system/category; scheduling against a specific component is a deliberate,
   larger change to the engine's match/write loop, intentionally deferred.

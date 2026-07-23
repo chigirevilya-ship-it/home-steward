@@ -503,6 +503,16 @@ function seed({ reset = false } = {}) {
   mkSys.run('Smoke / CO detectors', pTaylor, 'Safety Systems',
     'Battery units, replaced last year.', yearsAgo(1), null, 10, 5,
     null, null, null, null, 0, null);
+  // A composite system: one bucket, several components. One head is failing —
+  // the card rolls that up without dragging the whole system's rating down.
+  const sysMini = mkSys.run('Mini-split (whole-home)', pTaylor, 'Mini-Split / Heat Pump',
+    'Three-zone ductless system — one outdoor condenser feeding three indoor heads.', yearsAgo(6), null, 15, 4,
+    null, null, null, null, 0, null).lastInsertRowid;
+  mkEquip.run(pTaylor, sysMini, 'Outdoor condenser', 'Roof-mounted; feeds all three heads.', 'Mitsubishi', 'MXZ-3C24NA', null,
+    yearsAgo(6), 15, null, 4, null);
+  mkEquip.run(pTaylor, sysMini, 'Living-room head', null, 'Mitsubishi', 'MSZ-GL15NA', null, yearsAgo(6), 15, null, 4, null);
+  mkEquip.run(pTaylor, sysMini, 'Bedroom head', 'Rattles on start-up — on the list to swap.', 'Mitsubishi', 'MSZ-GL09NA', null,
+    yearsAgo(6), 15, null, 2, null);
   mkSub.run(taylor, rel(-60), rel(305), 'self_serve', 129, 'payments bypassed (demo)', rel(-60), 'Card', 'paid');
   const eqGen = mkEquip.run(pTaylor, null, 'Portable generator', 'Kept in garage for outages; self-entered.', 'Honda', 'EU2200i', null,
     yearsAgo(3), 12, rel(200), 4, null).lastInsertRowid;

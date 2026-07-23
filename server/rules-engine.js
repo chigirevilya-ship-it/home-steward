@@ -140,7 +140,7 @@ function generateForProperty(propertyId, actor = { kind: 'system', id: null }) {
   const db = open();
   const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(propertyId);
   if (!property) return { created: 0 };
-  const systems = db.prepare('SELECT * FROM systems WHERE property_id = ?').all(propertyId);
+  const systems = db.prepare('SELECT * FROM systems WHERE property_id = ? AND active = 1').all(propertyId);
   let created = 0;
 
   const insert = db.prepare(
@@ -215,7 +215,7 @@ function propagationPreview(rule) {
   const rows = db.prepare(
     `SELECT s.*, p.id AS pid, p.year_built, p.intake_date, p.market_id
      FROM systems s JOIN properties p ON p.id = s.property_id
-     WHERE p.active = 1 AND s.category = ?
+     WHERE p.active = 1 AND s.active = 1 AND s.category = ?
        AND (? IS NULL OR p.market_id = ?)`
   ).all(rule.system_category, rule.market_id ?? null, rule.market_id ?? null);
 

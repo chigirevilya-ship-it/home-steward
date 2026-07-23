@@ -18,9 +18,9 @@ const rel = (days) => new Date(Date.now() + days * DAY).toISOString().slice(0, 1
 // internal-vs-client-visible data. Add a column here to expose it.
 const VISIBLE = {
   system: ['id','system_name','category','description','install_date','expected_lifespan','condition_rating',
-    'model_number','warranty_expiry','last_service_date','age_years','remaining_life'],
+    'model_number','warranty_expiry','last_service_date','age_years','remaining_life','active'],
   equipment: ['id','system_id','system_name','name','description','make','model_number','serial_number',
-    'install_date','expected_lifespan','warranty_expiry','condition_rating','age_years','remaining_life','warranty_status'],
+    'install_date','expected_lifespan','warranty_expiry','condition_rating','age_years','remaining_life','warranty_status','active'],
   schedule: ['id','item_name','system_id','system_name','equipment_id','equipment_name','due_date','due_window',
     'priority','status','est_cost_low','est_cost_high','capital_forecast_item','completed_date','deferral_risk',
     'contractor_name','overdue','custom','repeat_value','repeat_unit'],
@@ -62,25 +62,29 @@ function buildPortalRecord(client, property) {
   const pid = property.id;
   const t = today();
 
-  const systems = db.prepare('SELECT * FROM systems WHERE property_id = ?').all(pid)
-    .map((s) => pick({
-      ...s,
-      age_years: rulesEngine.systemAgeYears(s, property) != null
-        ? Math.round(rulesEngine.systemAgeYears(s, property) * 10) / 10 : null,
-      remaining_life: rulesEngine.remainingLife(s, property),
-    }, VISIBLE.system))
+  const shapeSystem = (s) => pick({
+    ...s,
+    age_years: rulesEngine.systemAgeYears(s, property) != null
+      ? Math.round(rulesEngine.systemAgeYears(s, property) * 10) / 10 : null,
+    remaining_life: rulesEngine.remainingLife(s, property),
+  }, VISIBLE.system);
+  const allSystemRows = db.prepare('SELECT * FROM systems WHERE property_id = ?').all(pid);
+  const systems = allSystemRows.filter((s) => s.active !== 0).map(shapeSystem)
     .sort((a, b) => (a.remaining_life ?? 999) - (b.remaining_life ?? 999));
+  const retiredSystems = allSystemRows.filter((s) => s.active === 0).map(shapeSystem);
 
-  const equipment = db.prepare(
+  const shapeEquip = (e) => pick({
+    ...e,
+    age_years: rulesEngine.systemAgeYears(e, property) != null
+      ? Math.round(rulesEngine.systemAgeYears(e, property) * 10) / 10 : null,
+    remaining_life: rulesEngine.remainingLife(e, property),
+    warranty_status: rulesEngine.warrantyStatus(e.warranty_expiry),
+  }, VISIBLE.equipment);
+  const allEquipRows = db.prepare(
     `SELECT e.*, s.system_name FROM equipment e LEFT JOIN systems s ON s.id = e.system_id
-     WHERE e.property_id = ? AND e.active = 1 ORDER BY e.name`).all(pid)
-    .map((e) => pick({
-      ...e,
-      age_years: rulesEngine.systemAgeYears(e, property) != null
-        ? Math.round(rulesEngine.systemAgeYears(e, property) * 10) / 10 : null,
-      remaining_life: rulesEngine.remainingLife(e, property),
-      warranty_status: rulesEngine.warrantyStatus(e.warranty_expiry),
-    }, VISIBLE.equipment));
+     WHERE e.property_id = ? ORDER BY e.name`).all(pid);
+  const equipment = allEquipRows.filter((e) => e.active !== 0).map(shapeEquip);
+  const retiredEquipment = allEquipRows.filter((e) => e.active === 0).map(shapeEquip);
 
   const schedule = db.prepare(
     `SELECT f.*, s.system_name, e.name AS equipment_name, ct.company_name AS contractor_name
@@ -173,6 +177,8 @@ function buildPortalRecord(client, property) {
     disclaimer: SCOPE_DISCLAIMER,
     today: t,
     equipment,
+    retired_systems: retiredSystems,
+    retired_equipment: retiredEquipment,
     completed_tasks: completedTasks,
     my_contractors: myContractors,
   };
@@ -318,6 +324,57 @@ route('PATCH', /^\/api\/portal\/systems\/(\d+)$/, async (req, res, { session, pa
   sendJson(res, 200, { updated: id, generated_items: gen.created });
 });
 
+// Retire a whole system: keep its history, stop scheduling it, and pull its
+// components down with it. Logs the retirement as a dated event.
+route('POST', /^\/api\/portal\/systems\/(\d+)\/retire$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const sys = db.prepare('SELECT * FROM systems WHERE id = ?').get(id);
+  if (!sys || sys.property_id !== property.id) return sendError(res, 404, 'Not your system');
+  const body = await readJson(req).catch(() => ({}));
+  db.prepare('UPDATE systems SET active = 0 WHERE id = ?').run(id);
+  db.prepare('UPDATE equipment SET active = 0 WHERE system_id = ? AND active = 1').run(id);
+  db.prepare("UPDATE forward_schedule SET status = 'cancelled' WHERE system_id = ? AND status IN ('upcoming','scheduled')").run(id);
+  db.prepare(`INSERT INTO maintenance_log (property_id, system_id, date, description, performed_by)
+    VALUES (?,?,?,?,?)`).run(property.id, id, today(), `Retired: ${sys.system_name}${body.reason ? ` — ${body.reason}` : ''}`, 'homeowner');
+  audit('client', client.id, 'update', 'systems', id, 'retired');
+  sendJson(res, 200, { retired: id });
+});
+
+// Replace a whole system: retire the old shell, stand up a fresh one with the
+// same identity and a reset clock, carry the components over (replace those
+// individually if they changed too), and regenerate the schedule.
+route('POST', /^\/api\/portal\/systems\/(\d+)\/replace$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const old = db.prepare('SELECT * FROM systems WHERE id = ?').get(id);
+  if (!old || old.property_id !== property.id) return sendError(res, 404, 'Not your system');
+  const body = await readJson(req);
+  db.prepare('UPDATE systems SET active = 0 WHERE id = ?').run(id);
+  db.prepare("UPDATE forward_schedule SET status = 'cancelled' WHERE system_id = ? AND status IN ('upcoming','scheduled')").run(id);
+  const newId = db.prepare(
+    `INSERT INTO systems (system_name, property_id, category, description, install_date, expected_lifespan,
+       condition_rating, model_number, serial_number, warranty_expiry, active)
+     VALUES (?,?,?,?,?,?,?,?,?,?,1)`
+  ).run(body.system_name || old.system_name, property.id, old.category, body.description ?? old.description,
+    body.install_date || today(), body.expected_lifespan ?? old.expected_lifespan,
+    body.condition_rating ?? 5, body.model_number ?? null, body.serial_number ?? null,
+    body.warranty_expiry ?? null).lastInsertRowid;
+  db.prepare('UPDATE equipment SET system_id = ? WHERE system_id = ? AND active = 1').run(newId, id);
+  db.prepare(`INSERT INTO maintenance_log (property_id, system_id, date, description, performed_by)
+    VALUES (?,?,?,?,?)`).run(property.id, newId, body.install_date || today(),
+    `Replaced ${old.system_name}${body.note ? ` — ${body.note}` : ''}`, 'homeowner');
+  const gen = rulesEngine.generateForProperty(property.id, { kind: 'client', id: client.id });
+  audit('client', client.id, 'create', 'systems', newId, `replaced system ${id}`);
+  sendJson(res, 201, { id: newId, generated_items: gen.created });
+});
+
 route('POST', /^\/api\/portal\/recompute$/, async (req, res, { session }) => {
   const client = getClient(session);
   assertSelfServe(client);
@@ -376,6 +433,51 @@ route('PATCH', /^\/api\/portal\/equipment\/(\d+)$/, async (req, res, { session, 
     .run(...cols.map((c) => body[c]), id);
   audit('client', client.id, 'update', 'equipment', id, cols.join(','));
   sendJson(res, 200, { updated: id });
+});
+
+// Retire one component (keeps its history in the system's record).
+route('POST', /^\/api\/portal\/equipment\/(\d+)\/retire$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const eq = db.prepare('SELECT * FROM equipment WHERE id = ?').get(id);
+  if (!eq || eq.property_id !== property.id) return sendError(res, 404, 'Not your equipment');
+  const body = await readJson(req).catch(() => ({}));
+  db.prepare('UPDATE equipment SET active = 0 WHERE id = ?').run(id);
+  db.prepare(`INSERT INTO maintenance_log (property_id, system_id, equipment_id, date, description, performed_by)
+    VALUES (?,?,?,?,?,?)`).run(property.id, eq.system_id ?? null, id, today(),
+    `Retired: ${eq.name}${body.reason ? ` — ${body.reason}` : ''}`, 'homeowner');
+  audit('client', client.id, 'update', 'equipment', id, 'retired');
+  sendJson(res, 200, { retired: id });
+});
+
+// Replace one component: retire the old, add its successor under the same
+// system with a fresh clock, and log the swap.
+route('POST', /^\/api\/portal\/equipment\/(\d+)\/replace$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const old = db.prepare('SELECT * FROM equipment WHERE id = ?').get(id);
+  if (!old || old.property_id !== property.id) return sendError(res, 404, 'Not your equipment');
+  const body = await readJson(req);
+  db.prepare('UPDATE equipment SET active = 0 WHERE id = ?').run(id);
+  const newId = db.prepare(
+    `INSERT INTO equipment (property_id, system_id, name, description, make, model_number, serial_number,
+       install_date, expected_lifespan, warranty_expiry, condition_rating, active)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,1)`
+  ).run(property.id, old.system_id ?? null, body.name || old.name, body.description ?? old.description,
+    body.make ?? old.make, body.model_number ?? null, body.serial_number ?? null,
+    body.install_date || today(), body.expected_lifespan ?? old.expected_lifespan,
+    body.warranty_expiry ?? null, body.condition_rating ?? 5).lastInsertRowid;
+  db.prepare(`INSERT INTO maintenance_log (property_id, system_id, equipment_id, date, description, performed_by)
+    VALUES (?,?,?,?,?,?)`).run(property.id, old.system_id ?? null, newId, body.install_date || today(),
+    `Replaced ${old.name}${body.note ? ` — ${body.note}` : ''}`, 'homeowner');
+  audit('client', client.id, 'create', 'equipment', newId, `replaced equipment ${id}`);
+  sendJson(res, 201, { id: newId });
 });
 
 // ── Self-Serve service logging (both flows: mark-done and ad-hoc) ─────────

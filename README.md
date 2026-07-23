@@ -51,8 +51,12 @@ Self-Serve clients get a personal contractor book, service logging with
 categorized document attachments (quote/invoice/receipt/contract) and inline
 creation of a missing contractor, system, or piece of equipment without
 leaving the form, a permit history they can record themselves (with the
-permit PDF attached), editable service history with a timeline view, their own
-one-time or repeating tasks
+permit PDF attached), editable service history with a timeline view,
+system↔component lifecycle management (a system is the category bucket, its
+equipment are the components; each component's health rolls up to the system
+card, and either a single component or a whole system can be replaced or
+retired — the old record is kept with its history and the clock resets on the
+replacement), their own one-time or repeating tasks
 alongside the engine's schedule, and AI-suggested descriptions and
 maintenance schedules for systems/equipment (set `ANTHROPIC_API_KEY` to
 enable the Claude-powered version; without a key the Suggest button uses the

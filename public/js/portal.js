@@ -94,6 +94,7 @@ function selfSystemModal(r, existing, done) {
     </div>
     <div class="suggest-panel" id="sg-panel" style="display:none"></div>
     <div class="form-actions">
+      ${existing ? lifecycleButtonsHtml() : ''}
       <button type="button" class="btn" id="sg-btn">✨ Suggest schedule & description</button>
       <button class="btn btn-primary" id="ss-save">${existing ? 'Save changes' : 'Add system'}</button>
     </div>`,
@@ -123,7 +124,61 @@ function selfSystemModal(r, existing, done) {
       m.close(); done(id);
     } catch (err) { toast(err.message, 'err'); }
   });
+  bindLifecycle(m, r, 'system', existing, done);
   bindSuggest(m, r, 'system', existing, saveItem, done);
+}
+
+// Replace / retire actions shared by the system and equipment edit modals.
+const lifecycleButtonsHtml = () => `
+  <button type="button" class="btn" id="lc-replace">Replace</button>
+  <button type="button" class="btn btn-danger" id="lc-retire">Retire</button>`;
+
+function bindLifecycle(m, r, kind, existing, done) {
+  if (!existing) return;
+  const base = kind === 'system' ? 'systems' : 'equipment';
+  $('#lc-retire', m.body)?.addEventListener('click', async () => {
+    const what = kind === 'system' ? 'this system and its components' : 'this component';
+    if (!confirm(`Retire ${what}? Its history stays in your record; it just leaves your active inventory and stops being scheduled.`)) return;
+    try {
+      await api(`/api/portal/${base}/${existing.id}/retire`, { method: 'POST', body: {} });
+      invalidate();
+      toast('Retired — history kept');
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  $('#lc-replace', m.body)?.addEventListener('click', () => { m.close(); replaceModal(r, kind, existing, done); });
+}
+
+// Replace flow: retire the old record, stand up a fresh one with a reset clock.
+function replaceModal(r, kind, old, done) {
+  const isSys = kind === 'system';
+  const today = new Date().toISOString().slice(0, 10);
+  const m = modal(`Replace — ${esc(isSys ? old.system_name : old.name)}`, `
+    <p class="sub" style="margin-bottom:12px">Keeps the old one's history, retires it, and starts a fresh record with a new
+    install date and clock.${isSys ? ' Its components carry over to the new system — replace any that changed too.' : ''}</p>
+    <div class="form-grid">
+      ${field('name', 'Name', input(`value="${esc(isSys ? old.system_name : old.name)}"`))}
+      ${isSys ? '' : field('make', 'Make', input(`value="${esc(old.make || '')}"`))}
+      ${field('model_number', 'New model #', input(`placeholder="from the new unit's data plate"`))}
+      ${field('serial_number', 'New serial #', input())}
+      ${field('install_date', 'Installed', input(`type="date" value="${today}"`))}
+      ${field('expected_lifespan', 'Expected lifespan (yrs)', input(`type="number" step="0.5" value="${old.expected_lifespan ?? ''}" data-number`))}
+      ${field('warranty_expiry', 'Warranty until', input(`type="date"`))}
+      <div class="span2">${field('note', 'Note (optional)', input(`placeholder="e.g. old one failed — upgraded to a heat-pump model"`))}</div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" id="rp-save">Retire old &amp; add replacement</button>
+    </div>`, { wide: true });
+  $('#rp-save', m.body).addEventListener('click', async () => {
+    const body = formValues(m.body);
+    if (isSys) { body.system_name = body.name; delete body.name; }
+    try {
+      await api(`/api/portal/${isSys ? 'systems' : 'equipment'}/${old.id}/replace`, { method: 'POST', body });
+      invalidate();
+      toast('Replaced — old record retired, history kept');
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
 }
 
 function warrantyBadge(status, expiry) {
@@ -152,6 +207,7 @@ function selfEquipmentModal(r, existing, done) {
     </div>
     <div class="suggest-panel" id="sg-panel" style="display:none"></div>
     <div class="form-actions">
+      ${existing ? lifecycleButtonsHtml() : ''}
       <button type="button" class="btn" id="sg-btn">✨ Suggest schedule & description</button>
       <button class="btn btn-primary" id="pe-save">${existing ? 'Save changes' : 'Add equipment'}</button>
     </div>`,
@@ -181,6 +237,7 @@ function selfEquipmentModal(r, existing, done) {
       m.close(); done(id);
     } catch (err) { toast(err.message, 'err'); }
   });
+  bindLifecycle(m, r, 'equipment', existing, done);
   bindSuggest(m, r, 'equipment', existing, saveItem, done);
 }
 
@@ -500,26 +557,38 @@ function myContractorModal(existing, done) {
 // ── Connective tissue: detail panels + link chips ──────────────────────────
 // Everything related to a system / piece of equipment / contractor in one
 // place: open tasks, service history, documents.
+const allSystems = (r) => [...(r.systems || []), ...(r.retired_systems || [])];
+const allEquipment = (r) => [...(r.equipment || []), ...(r.retired_equipment || [])];
+const retiredTag = (item) => item.active === 0 ? ' <span class="badge b-muted">retired</span>' : '';
+
+// Roll a system's component health up to the card: a component counts as
+// needing attention if it's rated failing (≤2) or its warranty has expired.
+function componentHealth(components) {
+  const flagged = components.filter((e) =>
+    (e.condition_rating != null && e.condition_rating <= 2) || e.warranty_status === 'expired');
+  return { count: components.length, flagged };
+}
+
 function detailModal(r, kind, id, done) {
   const refresh = done || (() => {});
   let title = '', header = '', tasks = [], history = [], docs = [];
   if (kind === 'system') {
-    const s = r.systems.find((x) => x.id === id);
+    const s = allSystems(r).find((x) => x.id === id);
     if (!s) return;
     title = s.system_name;
-    const equip = r.equipment.filter((e) => e.system_id === id);
-    header = `<span class="chip">${esc(s.category)}</span> ${stars(s.condition_rating)}
+    const equip = allEquipment(r).filter((e) => e.system_id === id);
+    header = `<span class="chip">${esc(s.category)}</span> ${stars(s.condition_rating)}${retiredTag(s)}
       ${s.remaining_life != null ? `<span class="small muted"> · ~${s.remaining_life} yrs left</span>` : ''}
       ${s.description ? `<div class="small sub" style="margin-top:6px">${esc(s.description)}</div>` : ''}
-      ${equip.length ? `<div style="margin-top:8px">${equip.map((e) => `<span class="chip link-chip" data-detail="equipment:${e.id}">⚙ ${esc(e.name)}</span>`).join('')}</div>` : ''}`;
+      ${equip.length ? `<div style="margin-top:8px">${equip.map((e) => `<span class="chip link-chip" data-detail="equipment:${e.id}">⚙ ${esc(e.name)}${e.active === 0 ? ' ·retired' : ''}</span>`).join('')}</div>` : ''}`;
     tasks = r.schedule.filter((i) => i.system_id === id);
     history = r.log.filter((l) => l.system_id === id);
     docs = r.documents.filter((d) => d.system_id === id);
   } else if (kind === 'equipment') {
-    const e = r.equipment.find((x) => x.id === id);
+    const e = allEquipment(r).find((x) => x.id === id);
     if (!e) return;
     title = e.name;
-    header = `${e.system_name ? `<span class="chip link-chip" data-detail="system:${e.system_id}">${esc(e.system_name)}</span>` : '<span class="chip">freestanding</span>'}
+    header = `${e.system_name ? `<span class="chip link-chip" data-detail="system:${e.system_id}">${esc(e.system_name)}</span>` : '<span class="chip">freestanding</span>'}${retiredTag(e)}
       ${warrantyBadge(e.warranty_status, e.warranty_expiry)}
       <div class="small sub" style="margin-top:6px">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
       ${e.warranty_expiry && e.warranty_status === 'active' ? ` · warranty to ${fmtDate(e.warranty_expiry)}` : ''}</div>`;
@@ -832,14 +901,16 @@ export async function renderSystems(view) {
   <div class="grid g2">
     ${r.systems.map((s) => {
       const equip = r.equipment.filter((e) => e.system_id === s.id);
+      const health = componentHealth(equip);
       return `
     <div class="card card-pad">
       <div style="display:flex;justify-content:space-between;gap:8px">
         <div><h3>${esc(s.system_name)}</h3><span class="chip">${esc(s.category)}</span></div>
-        <div style="text-align:right">${stars(s.condition_rating)}<br>
+        <div style="text-align:right;white-space:nowrap">${stars(s.condition_rating)}<br>
           <span class="small muted">${s.remaining_life == null ? '' : s.remaining_life <= 0
             ? '<b style="color:var(--critical-text)">at end of expected life</b>' : `~${s.remaining_life} yrs of life left`}</span></div>
       </div>
+      ${health.flagged.length ? `<div style="margin-top:6px"><span class="badge b-serious">▲ ${health.flagged.length} of ${health.count} component${health.count > 1 ? 's' : ''} need${health.flagged.length > 1 ? '' : 's'} attention</span></div>` : ''}
       ${s.description ? `<div class="small sub" style="margin-top:6px">${esc(s.description)}</div>` : ''}
       ${ageBar(s)}
       <dl class="kv small" style="margin-top:10px">
@@ -849,9 +920,10 @@ export async function renderSystems(view) {
         ${s.model_number ? `<dt>Model</dt><dd>${esc(s.model_number)}</dd>` : ''}
       </dl>
       ${equip.length ? `<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--hairline-2)">
-        <div class="field-label" style="margin-bottom:4px">Equipment</div>
+        <div class="field-label" style="margin-bottom:4px">Components (${health.count})${health.flagged.length ? '' : ' · all healthy'}</div>
         ${equip.map((e) => `<div class="item-line small">
-          <div><b>${esc(e.name)}</b> ${warrantyBadge(e.warranty_status, e.warranty_expiry)}<br>
+          <div><b>${esc(e.name)}</b> ${warrantyBadge(e.warranty_status, e.warranty_expiry)}
+            ${e.condition_rating != null && e.condition_rating <= 2 ? '<span class="badge b-serious">▲ failing</span>' : ''}<br>
             <span class="muted">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
             ${e.warranty_expiry && e.warranty_status === 'active' ? ` · warranty to ${fmtDate(e.warranty_expiry)}` : ''}</span></div>
           ${r.self_serve ? `<span class="right"><button class="btn btn-sm" data-pe-edit="${e.id}">Edit</button></span>` : ''}
@@ -872,6 +944,20 @@ export async function renderSystems(view) {
           ${e.warranty_expiry && e.warranty_status === 'active' ? ` · warranty to ${fmtDate(e.warranty_expiry)}` : ''}</span></div>
         ${r.self_serve ? `<span class="right"><button class="btn btn-sm" data-pe-edit="${e.id}">Edit</button></span>` : ''}
       </div>`).join('')}
+    </div>` : '';
+  })()}
+  ${(() => {
+    const retired = [...(r.retired_systems || []), ...(r.retired_equipment || [])];
+    return retired.length ? `
+    <div class="card card-pad section" style="opacity:.85">
+      <h3 class="muted">Replaced &amp; retired</h3>
+      <p class="small muted" style="margin-bottom:8px">Kept so their history stays in your record. Open one to see its past service and documents.</p>
+      ${(r.retired_systems || []).map((s) => `<div class="item-line small">
+        <div><b>${esc(s.system_name)}</b> <span class="chip">${esc(s.category)}</span></div>
+        <span class="right"><button class="btn btn-sm" data-detail="system:${s.id}">History</button></span></div>`).join('')}
+      ${(r.retired_equipment || []).map((e) => `<div class="item-line small">
+        <div><b>${esc(e.name)}</b> ${e.system_name ? `<span class="muted">in ${esc(e.system_name)}</span>` : ''}</div>
+        <span class="right"><button class="btn btn-sm" data-detail="equipment:${e.id}">History</button></span></div>`).join('')}
     </div>` : '';
   })()}`;
 

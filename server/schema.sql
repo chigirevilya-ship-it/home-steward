@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS systems (
   warranty_expiry   TEXT,
   last_service_date TEXT,
   needs_specialist  INTEGER NOT NULL DEFAULT 0,
-  advisor_notes     TEXT                 -- internal only
+  advisor_notes     TEXT,                -- internal only
+  active            INTEGER NOT NULL DEFAULT 1   -- 0 once retired/replaced (history kept)
 );
 
 -- Equipment: individual components with their own lifespan/warranty story.

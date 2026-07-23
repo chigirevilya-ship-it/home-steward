@@ -48,8 +48,10 @@ Self-Serve accounts can also be created from the login screen ("Create a
 Self-Serve account") — signup is open, payments are bypassed, and the new
 client builds their own Home Record through guided onboarding (US-S1/S2).
 Self-Serve clients get a personal contractor book, service logging with
-categorized document attachments (quote/invoice/receipt/contract), editable
-service history with a timeline view, their own one-time or repeating tasks
+categorized document attachments (quote/invoice/receipt/contract) and inline
+creation of a missing contractor, system, or piece of equipment without
+leaving the form, editable service history with a timeline view, their own
+one-time or repeating tasks
 alongside the engine's schedule, and AI-suggested descriptions and
 maintenance schedules for systems/equipment (set `ANTHROPIC_API_KEY` to
 enable the Claude-powered version; without a key the Suggest button uses the

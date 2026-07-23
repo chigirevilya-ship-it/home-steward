@@ -117,10 +117,10 @@ function selfSystemModal(r, existing, done) {
 
   $('#ss-save', m.body).addEventListener('click', async () => {
     try {
-      await saveItem();
+      const id = await saveItem();
       invalidate();
       toast('Saved');
-      m.close(); done();
+      m.close(); done(id);
     } catch (err) { toast(err.message, 'err'); }
   });
   bindSuggest(m, r, 'system', existing, saveItem, done);
@@ -175,10 +175,10 @@ function selfEquipmentModal(r, existing, done) {
 
   $('#pe-save', m.body).addEventListener('click', async () => {
     try {
-      await saveItem();
+      const id = await saveItem();
       invalidate();
       toast('Equipment saved');
-      m.close(); done();
+      m.close(); done(id);
     } catch (err) { toast(err.message, 'err'); }
   });
   bindSuggest(m, r, 'equipment', existing, saveItem, done);
@@ -223,6 +223,36 @@ async function uploadFileRows(mBody, logId, systemId, equipmentId) {
   return uploaded;
 }
 
+// Inline "+ Add new…" on a picker. Picking the sentinel opens a small
+// creator modal on top of the current form; on save the picker refills from
+// the fresh record with the new item already selected — so a missing
+// contractor / system / equipment never forces you to abandon what you're
+// filling in. itemsFn(freshRecord) returns the {value,label} option list.
+function inlineCreate(selectEl, { placeholder, addLabel, itemsFn, openCreate }) {
+  if (!selectEl) return;
+  const rebuild = (items, sel) => {
+    selectEl.innerHTML =
+      `<option value="">${esc(placeholder)}</option>` +
+      items.map((o) => `<option value="${esc(o.value)}"${String(o.value) === String(sel) ? ' selected' : ''}>${esc(o.label)}</option>`).join('') +
+      `<option value="__new__">${esc(addLabel)}</option>`;
+  };
+  const sentinel = document.createElement('option');
+  sentinel.value = '__new__';
+  sentinel.textContent = addLabel;
+  selectEl.appendChild(sentinel);
+  let prev = selectEl.value;
+  selectEl.addEventListener('change', () => {
+    if (selectEl.value !== '__new__') { prev = selectEl.value; return; }
+    selectEl.value = prev; // never leave the sentinel as the live value
+    openCreate(async (newId) => {
+      if (newId == null) return;
+      const fresh = await record();
+      rebuild(itemsFn(fresh), newId);
+      prev = selectEl.value;
+    });
+  });
+}
+
 // Service log modal — "Log service", per-item "Mark done", and edit mode.
 function serviceModal(r, opts, done) {
   const { forwardItem = null, existing = null } = opts || {};
@@ -260,6 +290,24 @@ function serviceModal(r, opts, done) {
   const filesBox = $('#svc-files', m.body);
   addFileRow(filesBox);
   $('#svc-file-add', m.body).addEventListener('click', () => addFileRow(filesBox));
+
+  // Create a missing contractor / system / equipment without leaving the form.
+  inlineCreate($('[name=client_contractor_id]', m.body), {
+    placeholder: '— none / myself —', addLabel: '+ Add a contractor…',
+    itemsFn: (fresh) => fresh.my_contractors.map((c) =>
+      ({ value: c.id, label: c.company ? `${c.name} — ${c.company}` : c.name })),
+    openCreate: (cb) => myContractorModal(null, cb),
+  });
+  inlineCreate($('[name=system_id]', m.body), {
+    placeholder: '— none —', addLabel: '+ Add a system…',
+    itemsFn: (fresh) => fresh.systems.map((s) => ({ value: s.id, label: s.system_name })),
+    openCreate: (cb) => selfSystemModal(r, null, cb),
+  });
+  inlineCreate($('[name=equipment_id]', m.body), {
+    placeholder: '— none —', addLabel: '+ Add equipment…',
+    itemsFn: (fresh) => fresh.equipment.map((e) => ({ value: e.id, label: e.name })),
+    openCreate: (cb) => selfEquipmentModal(r, null, cb),
+  });
 
   $('#svc-save', m.body).addEventListener('click', async () => {
     const body = formValues(m.body);
@@ -319,6 +367,16 @@ function taskModal(r, existing, done) {
       <button class="btn btn-primary" id="task-save">${existing ? 'Save changes' : 'Add task'}</button>
     </div>`, { wide: true });
   $('[name=deferral_risk]', m.body).value = existing?.deferral_risk || '';
+  inlineCreate($('[name=system_id]', m.body), {
+    placeholder: '— none —', addLabel: '+ Add a system…',
+    itemsFn: (fresh) => fresh.systems.map((s) => ({ value: s.id, label: s.system_name })),
+    openCreate: (cb) => selfSystemModal(r, null, cb),
+  });
+  inlineCreate($('[name=equipment_id]', m.body), {
+    placeholder: '— none —', addLabel: '+ Add equipment…',
+    itemsFn: (fresh) => fresh.equipment.map((e) => ({ value: e.id, label: e.name })),
+    openCreate: (cb) => selfEquipmentModal(r, null, cb),
+  });
   $('#task-save', m.body).addEventListener('click', async () => {
     const body = formValues(m.body);
     if (!body.item_name || !body.due_date) return toast('Task name and due date are required', 'err');
@@ -360,11 +418,12 @@ function myContractorModal(existing, done) {
     const body = formValues(m.body);
     if (!body.name) return toast('Name is required', 'err');
     try {
+      let id = existing?.id;
       if (existing) await api(`/api/portal/contractors/${existing.id}`, { method: 'PATCH', body });
-      else await api('/api/portal/contractors', { method: 'POST', body });
+      else { const res = await api('/api/portal/contractors', { method: 'POST', body }); id = res?.id; }
       invalidate();
       toast('Contractor saved');
-      m.close(); done();
+      m.close(); done(id);
     } catch (err) { toast(err.message, 'err'); }
   });
   $('#mc-remove', m.body)?.addEventListener('click', async () => {

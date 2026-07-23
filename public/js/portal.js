@@ -398,6 +398,68 @@ function taskModal(r, existing, done) {
   });
 }
 
+// Permit record modal (self-serve): record a permit from work done on the
+// home, optionally attaching the permit PDF.
+function permitModal(r, existing, done) {
+  const attached = existing ? r.documents.filter((d) => d.permit_id === existing.id) : [];
+  const types = ['electrical', 'plumbing', 'structural', 'mechanical', 'general_building', 'demolition', 'other'];
+  const m = modal(existing ? `Edit permit — ${existing.permit_number || 'record'}` : 'Add a permit', `
+    <p class="sub" style="margin-bottom:12px">Record a building permit from work done on your home — a panel upgrade,
+    a re-roof, a water-heater swap. Attach the permit PDF if you have it.</p>
+    <div class="form-grid">
+      ${field('permit_number', 'Permit #', input(`value="${esc(existing?.permit_number || '')}" placeholder="e.g. BLD-2023-04812"`))}
+      ${field('permit_type', 'Type', select([{ value: '', label: '—' },
+        ...types.map((t) => ({ value: t, label: t.replace(/_/g, ' '), selected: existing?.permit_type === t }))]))}
+      ${field('date_filed', 'Filed', input(`type="date" value="${existing?.date_filed || ''}"`))}
+      ${field('date_finaled', 'Finaled / closed', input(`type="date" value="${existing?.date_finaled || ''}"`))}
+      ${field('status', 'Status', select(['unknown', 'pending', 'open', 'finaled', 'expired']
+        .map((s) => ({ value: s, label: s, selected: (existing?.status || 'unknown') === s }))))}
+      ${field('contractor_of_record', 'Contractor of record', input(`value="${esc(existing?.contractor_of_record || '')}"`))}
+      <div class="field span2"><span class="field-label">Final inspection</span>
+        <label class="checkbox-row"><input type="checkbox" name="final_inspection_passed" ${existing?.final_inspection_passed ? 'checked' : ''}> passed</label></div>
+      <div class="span2">${field('scope_description', 'Scope of work', textarea(`rows="2"`))}</div>
+      <div class="span2"><span class="field-label">Attach the permit document (optional)</span>
+        <div><input type="file" class="control" id="permit-file" style="max-width:280px"></div>
+        ${attached.length ? `<div style="margin-top:6px">${attached.map((d) => `<div class="small item-line">
+          <span class="chip">${label(d.document_type)}</span>
+          <a href="/api/documents/${d.id}/file" target="_blank">${esc(d.document_name)}</a></div>`).join('')}</div>` : ''}
+      </div>
+    </div>
+    <div class="form-actions">
+      ${existing ? '<button class="btn btn-danger" id="permit-delete">Delete</button>' : ''}
+      <button class="btn btn-primary" id="permit-save">${existing ? 'Save changes' : 'Add permit'}</button>
+    </div>`, { wide: true });
+  $('[name=scope_description]', m.body).value = existing?.scope_description || '';
+
+  $('#permit-save', m.body).addEventListener('click', async () => {
+    const body = formValues(m.body);
+    if (!body.permit_number && !body.scope_description) return toast('Enter a permit number or a scope of work', 'err');
+    try {
+      let permitId = existing?.id;
+      if (existing) await api(`/api/portal/permits/${existing.id}`, { method: 'PATCH', body });
+      else { const res = await api('/api/portal/permits', { method: 'POST', body }); permitId = res.id; }
+      const file = $('#permit-file', m.body).files[0];
+      if (file) {
+        const q = new URLSearchParams({ name: file.name, type: 'permit_doc', permit_id: permitId });
+        await fetch(`/api/portal/documents?${q}`, { method: 'POST', body: file,
+          headers: { 'Content-Type': file.type || 'application/octet-stream' } });
+      }
+      invalidate();
+      toast(existing ? 'Permit updated' : 'Permit added');
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  $('#permit-delete', m.body)?.addEventListener('click', async () => {
+    if (!confirm('Delete this permit record? An attached document stays in your Documents.')) return;
+    try {
+      await api(`/api/portal/permits/${existing.id}`, { method: 'DELETE' });
+      invalidate();
+      toast('Permit deleted');
+      m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+}
+
 // Personal contractor modal.
 function myContractorModal(existing, done) {
   const m = modal(existing ? `Edit — ${existing.name}` : 'Add a contractor', `
@@ -836,6 +898,8 @@ export async function renderHistory(view) {
   const total = r.log.reduce((sum, l) => sum + (l.invoice_amount || 0), 0);
   const docsByLog = {};
   for (const doc of r.documents) if (doc.maintenance_log_id) (docsByLog[doc.maintenance_log_id] ??= []).push(doc);
+  const permitDocs = {};
+  for (const doc of r.documents) if (doc.permit_id) (permitDocs[doc.permit_id] ??= []).push(doc);
   const performerCell = (l) => l.my_contractor_name
     ? `<span class="chip link-chip" data-detail="contractor:${l.client_contractor_id}">${esc(l.my_contractor_name)}</span>`
     : esc(l.contractor_name || l.performed_by || '—');
@@ -870,18 +934,28 @@ export async function renderHistory(view) {
     </span>
   </div>
   ${historyMode === 'timeline' ? timelineHtml : tableHtml}
-  ${r.permits.length ? `
-  <div class="section"><div class="section-head"><h2>Permit history</h2></div>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Permit</th><th>Type</th><th>Filed</th><th>Status</th><th>Scope</th></tr></thead>
+  ${r.self_serve || r.permits.length ? `
+  <div class="section"><div class="section-head"><h2>Permit history</h2>
+    ${r.self_serve ? '<button class="btn btn-sm" id="permit-add">+ Add permit</button>' : ''}</div>
+  ${r.permits.length ? `<div class="table-wrap"><table>
+    <thead><tr><th>Permit</th><th>Type</th><th>Filed</th><th>Status</th><th>Scope</th>${r.self_serve ? '<th></th>' : ''}</tr></thead>
     <tbody>${r.permits.map((pm) => `<tr>
-      <td>${esc(pm.permit_number || '—')}${pm.gap_flag ? '<br><span class="badge b-critical">▲ gap flag</span>' : ''}</td>
+      <td>${esc(pm.permit_number || '—')}${pm.gap_flag ? '<br><span class="badge b-critical">▲ gap flag</span>' : ''}
+        ${(permitDocs[pm.id] || []).map((d) => `<br><a class="small" href="/api/documents/${d.id}/file" target="_blank">📎 ${esc(d.document_name)}</a>`).join('')}</td>
       <td>${label(pm.permit_type)}</td><td>${fmtDate(pm.date_filed)}</td><td>${statusBadge(pm.status)}</td>
       <td>${esc(pm.scope_description || '')}${pm.gap_notes ? `<br><span class="small muted">${esc(pm.gap_notes)}</span>` : ''}</td>
-    </tr>`).join('')}</tbody></table></div></div>` : ''}`;
+      ${r.self_serve ? `<td><button class="btn btn-sm" data-permit-edit="${pm.id}">Edit</button></td>` : ''}
+    </tr>`).join('')}</tbody></table></div>`
+    : `<div class="card">${empty('No permits on record yet. Add permits from work done on your home — a panel upgrade, a re-roof, a water-heater swap — so your Home Record shows what has been done to code. Attach the permit PDF if you have it.')}</div>`}
+  </div>` : ''}`;
 
   const refresh = () => renderHistory(view);
   $('#svc-add', view)?.addEventListener('click', () => serviceModal(r, {}, refresh));
+  $('#permit-add', view)?.addEventListener('click', () => permitModal(r, null, refresh));
+  for (const b of $$('[data-permit-edit]', view)) {
+    b.addEventListener('click', () =>
+      permitModal(r, r.permits.find((p) => p.id === Number(b.dataset.permitEdit)), refresh));
+  }
   for (const b of $$('[data-hmode]', view)) {
     b.addEventListener('click', () => { historyMode = b.dataset.hmode; renderHistory(view); });
   }

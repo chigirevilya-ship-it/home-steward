@@ -522,6 +522,12 @@ function seed({ reset = false } = {}) {
     VALUES (?,?,?,?,?,?)`)
     .run(pTaylor, rel(-20), 'Re-caulked both bathrooms and sealed the kitchen backsplash.', 260, ccLuis,
       'Luis suggested checking the tub grout again in a year.').lastInsertRowid;
+  // A permit they recorded themselves (no researched_by → client-owned/editable).
+  const taylorPermit = ins(`INSERT INTO permits
+    (property_id, permit_number, date_filed, date_finaled, status, permit_type, scope_description, contractor_of_record, final_inspection_passed)
+    VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(pTaylor, 'SOM-2023-1187', rel(-420), rel(-360), 'finaled', 'plumbing',
+      'Water heater replacement — permit pulled by the plumber.', 'Bay State Plumbing', 1).lastInsertRowid;
 
   // ── Documents (small real files so download works out of the box) ─────
   const mkDoc = ins(`INSERT INTO documents
@@ -552,6 +558,10 @@ function seed({ reset = false } = {}) {
     'Somerville Handy Pros — Receipt\nRe-caulk two bathrooms + kitchen backsplash seal\nTotal: $260.00 (paid cash)\n');
   mkDoc.run('Caulking receipt — Handy Pros', 'receipt', f.rel, 'text/plain', f.size, pTaylor, null, null, taylorLog, null,
     'Receipt for bathroom/kitchen caulking.', rel(-20), null, taylor);
+  f = writeDemoFile('taylor-water-heater-permit.txt',
+    'City of Somerville — Plumbing Permit SOM-2023-1187\nScope: water heater replacement\nStatus: FINALED · final inspection passed\n');
+  mkDoc.run('Water heater permit (SOM-2023-1187)', 'permit_doc', f.rel, 'text/plain', f.size, pTaylor, null, null, null, taylorPermit,
+    'Plumbing permit for the water-heater replacement.', rel(-360), null, taylor);
 
   // ── Client request (portal) ────────────────────────────────────────────
   ins(`INSERT INTO client_requests (client_id, property_id, created_at, subject, body, status) VALUES (?,?,?,?,?,?)`)

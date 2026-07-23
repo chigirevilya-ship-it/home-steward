@@ -32,7 +32,7 @@ const VISIBLE = {
   visit: ['id','visit_date','visit_type','advisor_name','systems_reviewed','findings_summary'],
   contractor: ['id','company_name','primary_contact','email','phone','trades','preferred_pricing'],
   document: ['id','document_name','document_type','mime_type','size_bytes','system_id','system_name',
-    'equipment_id','equipment_name','maintenance_log_id','description','upload_date'],
+    'equipment_id','equipment_name','maintenance_log_id','permit_id','description','upload_date'],
   property: ['id','address_line1','address_line2','city','state','zip','year_built','square_footage','stories',
     'bedrooms','bathrooms','property_type','construction_type','foundation_type','ownership_date',
     'permit_jurisdiction','intake_date','record_completeness','narrative_summary'],
@@ -670,6 +670,80 @@ route('DELETE', /^\/api\/portal\/tasks\/(\d+)$/, async (req, res, { session, par
   sendJson(res, 200, { deleted: id });
 });
 
+// ── Self-Serve: permit history (record permits from work you've had done) ──
+// Client-editable fields only. gap_flag / gap_notes / researched_* stay
+// advisor-owned and never accept client input.
+const PERMIT_WRITE = ['permit_number','date_filed','date_finaled','status','permit_type',
+  'scope_description','contractor_of_record','final_inspection_passed'];
+const PERMIT_STATUS = ['finaled','open','expired','pending','unknown'];
+const PERMIT_TYPES = ['electrical','plumbing','structural','mechanical','general_building','demolition','other'];
+
+function cleanPermitBody(body) {
+  const out = {};
+  for (const c of PERMIT_WRITE) {
+    if (body[c] === undefined) continue;
+    let v = body[c];
+    if (c === 'status' && v != null && !PERMIT_STATUS.includes(v)) v = 'unknown';
+    if (c === 'permit_type' && v != null && !PERMIT_TYPES.includes(v)) v = 'other';
+    if (c === 'final_inspection_passed' && v != null) v = v ? 1 : 0;
+    out[c] = v === '' ? null : v;
+  }
+  return out;
+}
+
+route('POST', /^\/api\/portal\/permits$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const body = await readJson(req);
+  const fields = cleanPermitBody(body);
+  if (!fields.permit_number && !fields.scope_description) {
+    return sendError(res, 400, 'Give the permit a number or a scope description');
+  }
+  const cols = Object.keys(fields);
+  const db = open();
+  const id = db.prepare(
+    `INSERT INTO permits (property_id${cols.length ? ',' + cols.join(',') : ''})
+     VALUES (?${cols.map(() => ',?').join('')})`
+  ).run(property.id, ...cols.map((c) => fields[c])).lastInsertRowid;
+  audit('client', client.id, 'create', 'permits', id, fields.permit_number || fields.scope_description);
+  sendJson(res, 201, { id });
+});
+
+route('PATCH', /^\/api\/portal\/permits\/(\d+)$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM permits WHERE id = ?').get(id);
+  if (!existing || existing.property_id !== property.id) return sendError(res, 404, 'Not your permit');
+  const fields = cleanPermitBody(await readJson(req));
+  const cols = Object.keys(fields);
+  if (!cols.length) return sendError(res, 400, 'Nothing to update');
+  db.prepare(`UPDATE permits SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+    .run(...cols.map((c) => fields[c]), id);
+  audit('client', client.id, 'update', 'permits', id, cols.join(','));
+  sendJson(res, 200, { updated: id });
+});
+
+route('DELETE', /^\/api\/portal\/permits\/(\d+)$/, async (req, res, { session, params }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const db = open();
+  const id = Number(params[0]);
+  const existing = db.prepare('SELECT * FROM permits WHERE id = ?').get(id);
+  if (!existing || existing.property_id !== property.id) return sendError(res, 404, 'Not your permit');
+  // A client can only remove a permit they entered — never advisor-researched
+  // records (those carry a researched_by stamp).
+  if (existing.researched_by != null) return sendError(res, 403, 'This permit was researched by your advisor and can’t be deleted here');
+  db.prepare('UPDATE documents SET permit_id = NULL WHERE permit_id = ?').run(id);
+  db.prepare('DELETE FROM permits WHERE id = ?').run(id);
+  audit('client', client.id, 'delete', 'permits', id, existing.permit_number || existing.scope_description);
+  sendJson(res, 200, { deleted: id });
+});
+
 route('GET', /^\/api\/portal\/requests$/, async (req, res, { session }) => {
   const client = getClient(session);
   sendJson(res, 200, open().prepare(
@@ -691,20 +765,25 @@ route('POST', /^\/api\/portal\/documents$/, async (req, res, { session, query })
   const systemId = Number(query.get('system_id')) || null;
   const equipmentId = Number(query.get('equipment_id')) || null;
   const logId = Number(query.get('log_id')) || null;
+  const permitId = Number(query.get('permit_id')) || null;
   assertOwnSystem(db, property, systemId);
   assertOwnEquipment(db, property, equipmentId);
   if (logId) {
     const l = db.prepare('SELECT property_id FROM maintenance_log WHERE id = ?').get(logId);
     if (!l || l.property_id !== property.id) return sendError(res, 400, 'That service entry is not on your home');
   }
+  if (permitId) {
+    const pm = db.prepare('SELECT property_id FROM permits WHERE id = ?').get(permitId);
+    if (!pm || pm.property_id !== property.id) return sendError(res, 400, 'That permit is not on your home');
+  }
 
   const fileName = `${Date.now()}-c${client.id}-${name}`;
   fs.writeFileSync(path.join(FILES_DIR, fileName), buf);
   const id = db.prepare(
-    `INSERT INTO documents (document_name, document_type, file_path, mime_type, size_bytes, property_id, system_id, equipment_id, maintenance_log_id, description, upload_date, uploaded_by_client)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO documents (document_name, document_type, file_path, mime_type, size_bytes, property_id, system_id, equipment_id, maintenance_log_id, permit_id, description, upload_date, uploaded_by_client)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(name, type, fileName, req.headers['content-type'] || 'application/octet-stream',
-    buf.length, property.id, systemId, equipmentId, logId,
+    buf.length, property.id, systemId, equipmentId, logId, permitId,
     query.get('description') || null, today(), client.id).lastInsertRowid;
   audit('client', client.id, 'create', 'documents', id, name);
   sendJson(res, 201, pick(db.prepare('SELECT * FROM documents WHERE id = ?').get(id), VISIBLE.document));

@@ -326,6 +326,28 @@ CREATE TABLE IF NOT EXISTS client_contractors (
 );
 CREATE INDEX IF NOT EXISTS idx_client_contractors ON client_contractors(client_id);
 
+-- AI suggestion feedback: which suggested tasks homeowners actually accepted,
+-- keyed by an item "profile" (category, refined by make). This is the fleet
+-- learning signal — as more homes keep the same recommendations for, say, a
+-- gas water heater, those tasks become the consistent baseline the next
+-- suggestion is anchored to, so identical systems get identical advice.
+CREATE TABLE IF NOT EXISTS suggestion_feedback (
+  id               INTEGER PRIMARY KEY,
+  profile_key      TEXT NOT NULL,       -- normalized: "system:water_heater" (+ "|make")
+  category         TEXT,
+  kind             TEXT,                -- 'system' | 'equipment'
+  make             TEXT,
+  task_name        TEXT NOT NULL,
+  interval_months  INTEGER,
+  priority         TEXT,
+  source           TEXT,                -- 'ai' | 'rules' (which engine proposed it)
+  client_id        INTEGER REFERENCES clients(id),
+  property_id      INTEGER REFERENCES properties(id),
+  created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_suggest_feedback_profile ON suggestion_feedback(profile_key);
+CREATE INDEX IF NOT EXISTS idx_suggest_feedback_cat ON suggestion_feedback(category, kind);
+
 -- Portal request submission (§2.1: clients "can submit requests")
 CREATE TABLE IF NOT EXISTS client_requests (
   id          INTEGER PRIMARY KEY,

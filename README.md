@@ -57,6 +57,18 @@ maintenance schedules for systems/equipment (set `ANTHROPIC_API_KEY` to
 enable the Claude-powered version; without a key the Suggest button uses the
 built-in rule library).
 
+The Suggest feature isn't a one-shot lookup. It reads the **whole item
+context** — the system's age and condition, the equipment nested inside it,
+the documents already on file, its service history, and the tasks already
+scheduled (so it won't recommend what you already do) — and it learns across
+the **fleet**: as homeowners keep suggested tasks those choices are recorded
+(`suggestion_feedback`), and the next comparable item (a gas water heater,
+say) is anchored to what similar homes actually schedule, so identical systems
+get consistent advice. The panel shows the provenance ("Consistent with N
+similar homes"). This fleet signal grounds both the Claude prompt and the
+rule-library fallback, so recommendations get more consistent as the data
+grows — even without an API key.
+
 ## What's implemented
 
 ### Data model (§3)

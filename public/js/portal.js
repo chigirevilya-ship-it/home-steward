@@ -521,14 +521,21 @@ function bindSuggest(m, r, kind, existing, saveItem, done) {
     try {
       const v = formValues(m.body);
       const sg = await api('/api/portal/suggest', { method: 'POST', body: {
-        kind, name: v.system_name || v.name, category: v.category,
+        kind, id: existing?.id, name: v.system_name || v.name, category: v.category,
         make: v.make, model_number: v.model_number, install_date: v.install_date,
         age_at_intake: v.age_at_intake, expected_lifespan: v.expected_lifespan,
+        warranty_expiry: v.warranty_expiry, last_service_date: v.last_service_date,
+        condition_rating: readStars(m.body, 'condition_rating'),
+        description: $('[name=description]', m.body)?.value || null,
       } });
+      const fleet = sg.fleet || {};
       const panel = $('#sg-panel', m.body);
       panel.style.display = 'block';
       panel.innerHTML = `
         <h4>${sg.source === 'ai' ? '✨ AI suggestions' : 'Suggestions from the maintenance library'}</h4>
+        ${fleet.similar_homes ? `<div class="small muted" style="margin-bottom:6px">${fleet.from_feedback
+          ? `Learned from ${fleet.similar_homes} similar home${fleet.similar_homes === 1 ? '' : 's'}`
+          : `Consistent with ${fleet.similar_homes} similar home${fleet.similar_homes === 1 ? '' : 's'}`} in the Steward network.</div>` : ''}
         ${sg.description ? `<div class="small" style="margin-bottom:6px"><i>${esc(sg.description)}</i>
           <button type="button" class="btn btn-sm" id="sg-use-desc" style="margin-left:6px">Use as description</button></div>` : ''}
         ${sg.tasks.length ? `
@@ -565,6 +572,12 @@ function bindSuggest(m, r, kind, existing, saveItem, done) {
               ...(kind === 'system' ? { system_id: itemId } : { equipment_id: itemId }),
             } });
           }
+          // Feed the fleet learning loop with what was actually kept.
+          const vv = formValues(m.body);
+          api('/api/portal/suggest/accept', { method: 'POST', body: {
+            kind, category: vv.category, make: vv.make, source: sg.source,
+            tasks: picked.map((t) => ({ task_name: t.task_name, interval_months: t.interval_months, priority: t.priority })),
+          } }).catch(() => {});
           invalidate();
           toast(`Saved — ${picked.length} task(s) added to your schedule`);
           m.close(); done();

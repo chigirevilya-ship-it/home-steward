@@ -587,6 +587,26 @@ function seed({ reset = false } = {}) {
   mkFwd.run('LAFD brush clearance', pAlv, null, rel(10), '30d', 'standard', 'scheduled',
     400, 700, 0, null, 'LAFD inspection letters go out early summer; non-compliance fines start at $356.', null);
 
+  // Fleet learning signal: pretend several homes already kept the same
+  // suggestions for their gas water heaters, so a fresh Suggest for that
+  // category shows the "Learned from N similar homes" path out of the box.
+  const mkFeedback = ins(`INSERT INTO suggestion_feedback
+    (profile_key, category, kind, make, task_name, interval_months, priority, source, client_id, property_id, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+  const whHomes = db.prepare(
+    `SELECT s.property_id, p.client_id FROM systems s JOIN properties p ON p.id = s.property_id
+      WHERE s.category = 'Water Heater - Gas' LIMIT 4`).all();
+  const whTasks = [
+    ['Flush tank and check anode rod', 12, 'standard'],
+    ['Test the T&P relief valve', 12, 'standard'],
+  ];
+  for (const h of whHomes) {
+    for (const [name, iv, pr] of whTasks) {
+      mkFeedback.run('system:water heater - gas', 'Water Heater - Gas', 'system', null,
+        name, iv, pr, 'ai', h.client_id, h.property_id, new Date().toISOString());
+    }
+  }
+
   console.log(`Seeded: 3 markets, 5 staff, ${db.prepare('SELECT COUNT(*) n FROM clients').get().n} clients, ` +
     `${db.prepare('SELECT COUNT(*) n FROM properties').get().n} properties, ${db.prepare('SELECT COUNT(*) n FROM systems').get().n} systems, ` +
     `${db.prepare('SELECT COUNT(*) n FROM maintenance_rules').get().n} rules, ` +

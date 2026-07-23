@@ -7,7 +7,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { open, audit, today, FILES_DIR } = require('./db');
 const rulesEngine = require('./rules-engine');
-const { suggest } = require('./suggest');
+const { suggest, recordFeedback } = require('./suggest');
 const { SYSTEM_CATEGORIES, TIERS, SCOPE_DISCLAIMER } = require('./vocab');
 const { sendJson, sendError, readJson, readBody, pick, MAX_FILE_BODY } = require('./http-util');
 
@@ -594,6 +594,30 @@ function suggestAllowed(clientId) {
   return entry.count <= 30;
 }
 
+// Assemble the item's own surrounding context so suggestions consider the
+// whole picture (equipment inside it, documents on file, service history, and
+// what's already scheduled) — not just a name/model lookup. Ownership-scoped.
+function suggestRelated(db, property, kind, id) {
+  const related = { equipment: [], documents: [], history: [], scheduled: [] };
+  if (!id) return related;
+  const active = "status NOT IN ('completed','cancelled')";
+  if (kind === 'system') {
+    const sys = db.prepare('SELECT id FROM systems WHERE id = ? AND property_id = ?').get(id, property.id);
+    if (!sys) return related;
+    related.equipment = db.prepare('SELECT name, make, model_number, install_date FROM equipment WHERE system_id = ? AND active = 1').all(id);
+    related.documents = db.prepare('SELECT document_name, document_type FROM documents WHERE system_id = ?').all(id);
+    related.history = db.prepare('SELECT date, description FROM maintenance_log WHERE system_id = ? ORDER BY date DESC LIMIT 10').all(id);
+    related.scheduled = db.prepare(`SELECT item_name, due_date FROM forward_schedule WHERE system_id = ? AND ${active}`).all(id);
+  } else {
+    const eq = db.prepare('SELECT id FROM equipment WHERE id = ? AND property_id = ?').get(id, property.id);
+    if (!eq) return related;
+    related.documents = db.prepare('SELECT document_name, document_type FROM documents WHERE equipment_id = ?').all(id);
+    related.history = db.prepare('SELECT date, description FROM maintenance_log WHERE equipment_id = ? ORDER BY date DESC LIMIT 10').all(id);
+    related.scheduled = db.prepare(`SELECT item_name, due_date FROM forward_schedule WHERE equipment_id = ? AND ${active}`).all(id);
+  }
+  return related;
+}
+
 route('POST', /^\/api\/portal\/suggest$/, async (req, res, { session }) => {
   const client = getClient(session);
   assertSelfServe(client);
@@ -603,13 +627,33 @@ route('POST', /^\/api\/portal\/suggest$/, async (req, res, { session }) => {
   }
   const body = await readJson(req);
   if (!body.name && !body.category) return sendError(res, 400, 'Give the item a name or category first');
+  const db = open();
+  const kind = body.kind === 'equipment' ? 'equipment' : 'system';
+  const related = suggestRelated(db, property, kind, body.id ? Number(body.id) : null);
   const result = await suggest({
-    kind: body.kind === 'equipment' ? 'equipment' : 'system',
-    name: body.name, category: body.category, make: body.make, model_number: body.model_number,
+    kind, name: body.name, category: body.category, make: body.make, model_number: body.model_number,
     install_date: body.install_date, age_at_intake: body.age_at_intake, expected_lifespan: body.expected_lifespan,
-  }, property);
+    warranty_expiry: body.warranty_expiry, last_service_date: body.last_service_date,
+    condition_rating: body.condition_rating, description: body.description,
+  }, property, related);
   audit('client', client.id, 'create', null, null, `AI suggestion (${result.source}) for ${body.name || body.category}`);
   sendJson(res, 200, result);
+});
+
+// The learning loop: record which suggested tasks the homeowner accepted so
+// the fleet signal strengthens for the next comparable item.
+route('POST', /^\/api\/portal\/suggest\/accept$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const { property } = clientProperty(client, null);
+  const body = await readJson(req);
+  const tasks = Array.isArray(body.tasks) ? body.tasks : [];
+  if (!tasks.length) return sendJson(res, 200, { recorded: 0 });
+  const recorded = recordFeedback(open(), {
+    kind: body.kind === 'equipment' ? 'equipment' : 'system',
+    category: body.category, make: body.make,
+  }, tasks, body.source, client.id, property.id);
+  sendJson(res, 200, { recorded });
 });
 
 route('DELETE', /^\/api\/portal\/tasks\/(\d+)$/, async (req, res, { session, params }) => {

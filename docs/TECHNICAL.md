@@ -189,10 +189,10 @@ of equipment. Three ideas stack:
    improves as data grows. The user-facing behavior is identical; only quality
    differs.
 
-> **This dual path is also the business's Free/paid line.** The rule engine
-> (free to run) powers the **Free** tier; the AI-backed path powers the paid
-> tiers (**Auto** and up). See `BUSINESS.md` §5/§7 — no extra code is needed to
-> draw that line; it already exists here.
+> **This dual path is also the business's free/paid line.** The rule engine
+> (free to run) powers the **Basic (free)** tier; the AI-backed path powers the
+> paid tiers (**Enhanced** and up). See `BUSINESS.md` §5/§8 — no extra code is
+> needed to draw that line; it already exists here.
 
 > **Product framing note:** in the UI this is presented as **Steward's
 > recommendations** — the service, not the mechanism. The Claude integration
@@ -221,12 +221,12 @@ save as PDF), including systems, schedule, full history, permits, and — at
 eligible tiers — the capital forecast. This is the owner's portable,
 transferable artifact and a core data-ownership guarantee.
 
-### 5.7 Address enrichment & permit monitoring (planned — the "Auto" tier)
+### 5.7 Address enrichment (planned — the Enhanced "Effortless" pillar)
 
-The highest-leverage planned addition: turn onboarding from "type in your
-house" into "enter your address, confirm the draft." It also *strengthens* the
-data model — public records timestamp system installs, which directly seed the
-schedule.
+The highest-leverage planned addition and **Track A** of the build: turn
+onboarding from "type in your house" into "enter your address, confirm the
+draft." It also *strengthens* the data model — public records timestamp system
+installs, which directly seed the schedule.
 
 **Architecture — a pluggable enrichment service run at onboarding**
 (address in → draft Home Record out):
@@ -250,10 +250,11 @@ schedule.
    optics). Feeds the same tables self-entry produces.
 6. **Cache every lookup** in the DB — which doubles as fleet-corpus growth.
 
-**Permit monitoring** (the recurring hook for Auto): periodically re-query the
-address's civic source and surface new permits ("a new electrical permit was
-pulled on your address"). This is what makes Auto a *recurring* subscription
-rather than a one-time build.
+**Permits are a one-time input, not a recurring feature.** They timestamp
+system installs for the auto-build; they are *not* surfaced as ongoing "a
+permit was pulled" alerts — an owner already knows when they commission work.
+The recurring value of Enhanced lives in the Proactive + Money-smart pillars
+(§5.8), not in permit monitoring.
 
 **Honest constraints:** coverage is excellent in metros, sparse in the exurbs
 (design for best-effort + user fill-in); address↔record matching is non-trivial
@@ -265,6 +266,38 @@ data — which the existing **permit gap-flag** turns into a feature.
 **Fits the existing architecture cleanly:** it's a new pre-onboarding module
 that emits the same `properties`/`systems`/`permits` rows the portal already
 consumes; nothing downstream changes.
+
+### 5.8 Notification / delivery subsystem (planned — the backbone of "Proactive")
+
+**None of this exists today**, and it is the critical dependency for the
+Enhanced hero: the entire Proactive pillar (what's-about-to-break, seasonal
+nudges, warranty & recall alerts) is *delivered* messages. The app currently
+only *displays* the schedule in-portal; there is no outbound channel. This is
+**Track B, step 1** — nothing "proactive" ships without it.
+
+**Shape:**
+
+- **A scheduler/worker** that evaluates each active home on an interval against
+  its schedule, system ages, warranties, recall matches, and local weather, and
+  produces due *events*. (The rules engine already runs on a daily interval —
+  this extends that loop from "write schedule rows" to "emit notifications.")
+- **A delivery channel** — email to start (the pragmatic first channel), later
+  push/SMS. This is the one place the zero-dependency stance likely bends: email
+  needs an SMTP/provider integration, kept behind a small adapter so the core
+  stays clean.
+- **A notifications table** (dedupe, read/sent state, per-owner preferences) and
+  a portal inbox mirroring what was sent.
+
+**Feeds it (the Proactive/Money-smart features that ride on this backbone):**
+
+- **Warranty & recall guardian** — evaluate `equipment`/`systems`
+  make/model/warranty against expiry windows and public recall data (CPSC API).
+  Buildable now.
+- **Seasonal / weather nudges** — join the schedule to a weather API by the
+  property's location. Buildable now.
+- **Failure prediction & cost intelligence** — rank "what's about to break" from
+  age + fleet failure curves, and benchmark job costs from logged invoices.
+  Compound as the fleet grows.
 
 ---
 
@@ -417,16 +450,34 @@ home including a composite multi-component system).
 
 ## 13. Roadmap / known technical debt
 
-- **Address enrichment + permit monitoring** (§5.7) — the "Auto" tier. Highest
-  business leverage: kills onboarding friction and seeds records from public
-  data. Start with a Boston open-data proof of concept.
-- **Tier rewiring** — bring `server/vocab.js` in line with the target model in
-  `BUSINESS.md` §5: **Free / Auto / Guided / Managed** (+ bespoke Concierge),
-  new prices, and moving the capital-forecast gate to Auto+. The Free/paid
-  recommendation line already exists (§5.4); this is mostly config + gating.
-- **Growth analytics** — the founder console covers operations; funnel, cohort
-  retention, LTV/CAC, and data-asset density reporting are not yet built. The
-  instrumentation needed to run the free-first funnel by the numbers.
+The organizing goal is **Enhanced (~$120) as the #1 seller**, pursued on two
+parallel tracks (per the product decision to run automation and delivered-
+service at once).
+
+**Track A — Effortless (auto-build):**
+
+- **Address enrichment** (§5.7) — geocode → property data → civic permit
+  adapters → LLM extraction → confirm. Kills onboarding friction and seeds
+  records from public data. Start with a Boston open-data proof of concept.
+
+**Track B — Proactive + Money-smart (the recurring value):**
+
+- **Notification / delivery subsystem** (§5.8) — the backbone; nothing
+  "proactive" ships without it. Build first within this track.
+- **Warranty & recall guardian + seasonal/weather nudges** — buildable now on
+  the existing data model + public APIs (CPSC, weather).
+- **Cost intelligence + failure prediction** — compound as the fleet grows;
+  benchmark from logged invoices, rank from age + fleet failure curves.
+
+**Cross-cutting:**
+
+- **Tier rewiring** — bring `server/vocab.js` in line with `BUSINESS.md` §5:
+  **Basic (Free) / Enhanced (~$120) / Guided ($500) / Managed ($1,200)**,
+  Concierge removed, the AI-path gated to Enhanced+, and the capital-forecast
+  gate moved to Enhanced+ (with a headline number for Basic). The rules-vs-AI
+  line already exists (§5.4); this is mostly config + gating.
+- **Growth analytics** — funnel, cohort retention, LTV/CAC, data-asset density.
+  The instrumentation to run the Basic→Enhanced funnel by the numbers.
 - **UI language pass** — present recommendations as "Steward's" rather than
   "AI"/"Claude" (function unchanged; privacy disclosure unchanged).
 - **Privacy hardening** — policy, consent, right-to-be-forgotten purge,
@@ -434,9 +485,6 @@ home including a composite multi-component system).
   relationships must be disclosed.
 - **Migration tooling** — replace the hand-rolled in-place rebuilds before a
   Postgres port.
-- **Guided assessment depth** — make onboarding **address-first** (§5.7), then
-  a system-by-system, photo/data-plate-capture walkthrough to raise both
-  completion and data quality.
-- **Component-level scheduling** — the rules engine currently schedules per
+- **Component-level scheduling** — the rules engine schedules per
   system/category; scheduling against a specific component is a deliberate,
   larger change to the engine's match/write loop, intentionally deferred.

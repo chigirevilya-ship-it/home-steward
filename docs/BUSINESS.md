@@ -2,76 +2,75 @@
 
 *A working description of Steward as a business: what it is, who it serves,
 how it makes money, and the strategy behind it. This document describes the
-model as currently built and the strategic options under active
-consideration. It is a living document — where reality and intent differ,
-that is called out.*
+model as currently built and the strategic target under active development. It
+is a living document — where reality and intent differ, that is called out.*
 
 ---
 
 ## 1. What Steward is
 
-**Steward is the system of record for a home, plus a proactive service that
-tells owners what to maintain, when, and who to call.**
+**Steward is the maintenance service for your home. You give it your address;
+it knows what your home needs, warns you before things break, and tells you
+what they should cost.**
 
-A house is one of the largest assets most people own, yet its history lives in
-a shoebox of receipts, a few permits nobody can find, and the memory of
-whoever owned it last. Steward replaces that with a durable **Home Record** —
-every system, its age and condition, what's been serviced, what's coming due,
-the permits, the documents — and wraps a **maintenance advisory** around it:
-a schedule generated from the home's actual systems, and escalating levels of
-help building and acting on it.
+A house is one of the largest assets most people own, yet its upkeep runs on
+guesswork and its history lives in a shoebox of receipts. Steward replaces that
+with a durable **Home Record** — every system, its age and condition, what's
+been serviced, what's coming due, the permits, the documents — and turns it
+into an active service that watches the home for you.
 
-**Core promise (every tier):** *Know what your home needs before it becomes a
-problem.*
-
-**The axis the tiers move on:** *who does the work of knowing and caring for
-your home* — **you → AI → a human who validates → a human who manages.** That
-single spectrum is the whole model. The core promise never changes; what
-changes is how much is done for you.
+- **Core promise (every tier):** *Know what your home needs before it becomes a
+  problem.*
+- **The hero product is the paid Enhanced tier** (~$120/yr): the whole service,
+  AI-driven, no human required. It is designed to be the **#1 seller** — the
+  default choice most owners land on.
+- **The tiers move on one axis:** *who does the work of knowing and caring for
+  your home* — **you (free) → Steward's AI (Enhanced) → a human who validates
+  (Guided) → a human who manages (Managed).** The core promise never changes;
+  what changes is how much is done for you.
 
 ---
 
 ## 2. The problem
 
 - **Deferred maintenance is expensive and invisible.** Small problems (an
-  unflushed water heater, a missed roof repair) become large ones. Owners
-  don't have a schedule and don't know what "on time" looks like.
+  unflushed water heater, a missed roof repair) become large ones. Owners don't
+  have a schedule and don't know what "on time" looks like.
 - **Home knowledge doesn't transfer.** When a home changes hands, its history
   evaporates. Buyers inherit mystery; sellers can't prove the care they took.
-- **Finding trustworthy contractors is a cold-start every time.** No memory of
-  who did good work, no accountability, no leverage.
+- **Finding trustworthy contractors — and knowing a fair price — is a
+  cold-start every time.** No memory of who did good work, no benchmark for
+  what a job should cost.
 - **Professional help is all-or-nothing.** You either manage everything
   yourself or hire a property manager. There's little in between for an
-  owner-occupier who wants guidance, not a landlord service.
+  owner-occupier who wants a home that's handled, not a landlord service.
 
-Steward addresses all four with one artifact (the Home Record) and one engine
-(the maintenance schedule), delivered at a range of service levels.
+Steward addresses all four with one artifact (the Home Record) and one service
+that acts on it.
 
 ---
 
-## 3. Value proposition
+## 3. Value proposition — the three pillars
 
-The wedge is **peace of mind / anti-surprise** — everyone fears the surprise
-$9k repair. The core promise (*know what your home needs before it becomes a
-problem*) is true at every tier; the paid tiers escalate on **who does the
-work.**
+The Enhanced hero is one product story, told in three pillars:
 
-| For the owner | Steward delivers |
-|---|---|
-| "What do I need to do, and when?" | A schedule generated from the home's real systems, not generic advice |
-| "Is this normal / urgent?" | Priority and cost ranges on every item; a 5-year capital forecast |
-| "Who do I call?" | A vetted contractor network (human tiers) or a personal contractor book (self-serve) |
-| "Where's the paperwork?" | Every permit, invoice, warranty, and photo in one place, exportable anytime |
-| "Will this help when I sell?" | A complete, printable Home Record that documents the care the home received |
+- **Effortless — it sets itself up.** Enter your address; Steward drafts your
+  home's record and schedule from public + fleet data, and you confirm. No
+  data-entry chore.
+- **Proactive — nothing sneaks up on you.** A living maintenance schedule, plus
+  *what's about to break*, *seasonal/weather nudges*, and a *warranty & recall
+  watch* — **delivered to you**, not buried in an app. This is the
+  anti-surprise core and the reason the service is worth a recurring fee.
+- **Money-smart — you never overpay.** What a job *should* cost, your yearly
+  spend forecast, and what's still under warranty.
 
-- **Resale value** is a real benefit, but it's a *supporting* proof point, not
-  the headline — its payoff is distant (it only cashes in at sale).
-- **Done-for-you** is the escalation the paid tiers monetize, not the wedge —
-  free/DIY owners are, by definition, doing it themselves.
+**Effortless. Proactive. Money-smart.** That is the pitch.
 
-The defensible promise at the higher tiers is **judgment and labor** — a human
-who knows the home walks it, chases the warranty, books the contractor. The
-software (and increasingly the AI) is the memory; the human is the service.
+The wedge emotion is **peace of mind / anti-surprise** — everyone fears the
+surprise $9k repair. Resale value (a documented, transferable record) is a real
+benefit but a *supporting* proof point, not the headline — its payoff is
+distant. "Done-for-you by a human" is the escalation the top tiers monetize,
+not the wedge.
 
 ---
 
@@ -79,22 +78,20 @@ software (and increasingly the AI) is the memory; the human is the service.
 
 ### Customers (homeowners)
 
-- **The DIY owner (Free).** Wants structure, not a service. Will document
-  their own home and follow a schedule if it's made easy. Price-sensitive;
-  high volume; the top of the funnel and the data-capture engine. *Demo:
-  Taylor Brooks.*
-- **The Auto owner (~$120).** Wants the payoff without the data entry. Enters
-  an address, lets Steward auto-build the record from public data, and manages
-  the upkeep themselves — with ongoing permit monitoring watching their home.
-- **The Guided owner ($500).** Wants a human to *validate* the record — catch
-  what public data and self-entry miss (actual condition, unpermitted work) —
-  and to answer questions. Manages the work themselves. *Demo: Mia.*
-- **The Managed owner ($1,200).** Busy; wants Steward to actively manage the
-  upkeep — coordinate contractors, chase warranties and permits, run seasonal
-  work — with a capital forecast for budgeting. *Demo: James.*
-- **The white-glove owner (Concierge, by quote).** High-value home and/or low
-  time; wants Steward to own the whole relationship end-to-end. A bespoke
-  offering, not a shelf price. *Demo: Sarah.*
+- **The Enhanced owner — the primary target.** Wants their home handled without
+  hiring anyone. Will pay ~$10/month to stop worrying about what's coming,
+  what's about to break, and whether they're overpaying. This is who the
+  product is designed for and the tier most owners should land on. *Demo: an
+  upgraded Taylor Brooks.*
+- **The Basic (free) owner.** Not yet convinced, or genuinely DIY. Documents
+  their own home and gets a static plan. Valuable as **top-of-funnel and data**
+  — the lead magnet that converts up to Enhanced.
+- **The Guided owner.** Wants a human to *validate* the record — catch what
+  public data and self-entry miss (actual condition, unpermitted work) — and to
+  answer questions. Manages the work themselves. *Demo: Mia.*
+- **The Managed owner.** Busy; wants Steward to actively manage the upkeep —
+  coordinate contractors, chase warranties and permits, run seasonal work — with
+  a capital forecast for budgeting. *Demo: James.*
 
 Common thread: **owner-occupiers who see the home as an asset to be stewarded,
 not just shelter.** Not landlords (that's property management) and not flippers.
@@ -105,172 +102,188 @@ not just shelter.** Not landlords (that's property management) and not flippers.
   library, contractor network health, the referral ledger. Sees everything.
 - **SME advisor.** A senior, market-specific expert (e.g. a former GC or
   inspector) who runs intakes and complex assessments.
-- **Advisor.** Runs visits, logs jobs, updates records within one market.
+- **Advisor.** Runs validation visits, logs jobs, updates records within one
+  market.
 - **Contractor (network).** Vetted trade partners who receive referrals; they
-  pay Steward a referral fee. Steward is **never** in the payment chain
-  between owner and contractor.
+  pay Steward a referral fee. Steward is **never** in the payment chain between
+  owner and contractor.
 
 ---
 
 ## 5. Service tiers
 
-Four published tiers, arranged on one axis — **who does the work of knowing
-and caring for your home**: you → AI → a human who validates → a human who
-manages. A fifth (Concierge) sits above them as bespoke, by quote. Prices are
-annual.
+Four tiers on one axis (who does the work). **Enhanced is the hero** — defined
+first because the rest of the ladder is derived from it.
 
-| | **Free** — $0 | **Auto** — ~$120 | **Guided** — $500 | **Managed** — $1,200 |
-|---|---|---|---|---|
-| **Who builds & keeps your record** | You, by hand | AI, from your address | AI draft + human validation | Steward, actively |
-| **Record creation** | Manual entry | Auto from address (permits, assessor) → AI-structured | Auto + a human walkthrough that catches what records miss | Auto + human, kept current |
-| **Maintenance schedule** (generated) | ✓ | ✓ | ✓ | ✓ |
-| **Steward's recommendations** | Rules-based | AI-backed | AI-backed + advisor input | AI + advisor-managed |
-| **Permit data** | — (manual) | Auto-import **+ ongoing monitoring** | + human-validated | + acted on for you |
-| **5-year capital forecast** | — | ✓ | ✓ | ✓ |
-| **Document & permit vault** | Capped | Unlimited | Unlimited | Unlimited |
-| **Full export / data ownership** | ✓ | ✓ | ✓ | ✓ |
-| **Human involvement** | None | None | Annual validation + targeted support (ask an expert, quote review) | Active management (coordination, warranty/permit chasing, seasonal work) |
-| **Contractors** | Personal book | Personal book | Vetted network referrals | Steward coordinates end-to-end |
-| **Physical visit** | — | — | 1 annual validation walkthrough | 1 annual + event-driven |
+### The hero: Enhanced — ~$120/yr
 
-**Concierge (by quote).** White-glove above Managed — a dedicated advisor,
-on-demand access, full end-to-end management for high-value / low-time owners.
-Deliberately *not* a shelf price: it's a labor business, so it's sold bespoke
-and kept off the published ladder to avoid over-investing the roadmap in a
-handful of high-touch accounts. It still serves as the price anchor that makes
-Managed look reasonable.
+*Your home, handled.* The whole service, AI-driven, no human required — built
+to be the default choice and the #1 seller.
 
-### The seams that matter
+| Pillar | What Enhanced delivers | Ready at launch? |
+|---|---|---|
+| **Effortless** | Auto-build the record + schedule from your address (permits, assessor data), you confirm | Net-new build (Track A) |
+| **Proactive** | Living schedule · what's-about-to-break · seasonal/weather nudges · warranty & recall watch — all *delivered* to you | Warranty/recall + seasonal buildable now; failure prediction compounds with data |
+| **Money-smart** | What jobs should cost · yearly spend forecast · warranty tracking | Forecast built; cost benchmarking compounds with logged invoices |
 
-Two distinctions keep this model from getting fuzzy:
+Enhanced also includes everything Basic has (record, schedule, vault, export),
+without the caps.
 
-- **What makes Auto a *recurring* charge (not a one-time trick).** Auto-entry
-  is a great first moment, but you can't bill yearly for something that happens
-  once. The recurring hook is **permit monitoring** ("a new electrical permit
-  was pulled on your address") plus the living schedule, unlimited AI
-  recommendations, and the forecast. The address is the gift that keeps giving.
-- **"Entry" appears at both Auto and Guided — on purpose.** At Auto, AI does
-  entry *from public records*. At Guided, a **human validates it** — and that's
-  worth the step-up because public data is blind to the two things that matter
-  most: **actual condition** and **unpermitted work**. A person walking the
-  home catches "the records say nothing, but that furnace is done" and "there's
-  a finished basement with no permit." The value of the human here isn't more
-  data entry — it's **truth the data can't see** (this is exactly the existing
-  permit **gap-flag** concept).
+### The strip-down: Basic — Free ($0)
+
+Basic is **the same product with the service removed** — a passive notebook,
+not an active steward. It exists to capture homes and data and to convert
+upward.
+
+| | **Basic** (Free) | **Enhanced** (~$120) |
+|---|---|---|
+| Setup | You enter it by hand | Auto-built from your address |
+| Schedule | Static, rules-based, view-in-app | Living + AI-tuned |
+| What's about to break | — | ✓ |
+| Seasonal / weather nudges | — | ✓ |
+| Warranty & recall watch | — | ✓ |
+| Cost intelligence & spend forecast | Headline number only | Full |
+| Proactive alerts (delivered to you) | — | ✓ |
+| Properties / storage | 1 / capped | Multiple / unlimited |
+| Export & data ownership | ✓ | ✓ |
+
+**The line in one sentence:** *Basic shows you the plan; Enhanced runs the plan
+for you.* Everything Enhanced adds is Steward doing the watching and warning so
+you don't have to remember to look — which is exactly what people pay ~$10/month
+to stop doing.
+
+### The human tiers (the full ladder)
+
+Above Enhanced, the escalation is a human doing more of the work:
+
+| Tier | Price/yr | What the human adds |
+|---|---|---|
+| **Guided** | $500 | One annual **validation walkthrough** — catches what data can't see (actual condition, unpermitted work) — plus targeted support (ask an expert, quote review). You still do the work. |
+| **Managed** | $1,200 | **Active management** — Steward coordinates contractors, chases warranties and permits, runs seasonal work. Plus a 1 annual visit + event-driven visits when something warrants eyes. |
 
 **Visits are annual + event-driven, never calendar-dense.** A stable home
-doesn't drift fast enough to justify quarterly or even semiannual
-reassessment. Higher tiers differentiate on *management depth and access*, not
-inspection frequency; extra visits happen when something actually warrants
-eyes.
+doesn't drift fast enough to justify quarterly or semiannual reassessment;
+the human tiers differentiate on *management depth and access*, not inspection
+frequency.
 
-**Tier-scoped features are enforced in software, not just marketing** — e.g.
-the capital forecast and the AI-backed recommendation path gate on tier.
+*(Concierge / bespoke white-glove is intentionally not on the ladder — it's a
+labor business that can return later as a by-quote offering if demand warrants.)*
 
-> **Build reality:** the shipped app currently defines the older tier set
-> (Self-Serve $129 / Guided / Managed / Concierge) in `server/vocab.js` and
-> gates the capital forecast at Managed+. The model above is the **target**;
-> rewiring prices, the Free/Auto split, and the forecast gate into the code is
-> a deliberate, not-yet-done step (see §11).
+> **Build reality:** the shipped app defines the older tier set (Self-Serve
+> $129 / Guided / Managed / Concierge) in `server/vocab.js` and gates the
+> capital forecast at Managed+. The model above is the **target**; rewiring the
+> names, prices, the Basic/Enhanced split, and the gates into the code is a
+> deliberate, not-yet-done step (see §12).
 
 ---
 
-## 6. Revenue model
+## 6. Differentiation
 
-Three streams, in order of scale potential:
+What makes Steward hard to copy is not the schedule — it's the compounding data
+and the delivered service. Five differentiators, each mapped to a pillar and
+each *uniquely enabled by what Steward has* (the structured record + the fleet):
 
-1. **Subscriptions** — the core. Recurring annual revenue across the paid
-   tiers (Auto, Guided, Managed) plus bespoke Concierge. ARR/MRR, renewals,
-   and churn are already tracked in the founder console.
-2. **Referral fees** — network contractors pay Steward a fee (~10–12% of
-   invoice) on referred work. This is recorded and invoiced in a ledger.
-   **Steward never processes the owner's payment to the contractor** — it
-   records and bills the fee to the contractor. The referral relationship is
-   disclosed to owners; the fee *accounting* stays internal.
-3. **Intake fees** — one-time fees for the initial home assessment on the
-   human tiers (modeled in the `intake_fees` table).
+1. **The transferable Home Record — "Carfax for houses."** The record becomes an
+   asset the moment a home changes hands: a seller proves care, a buyer inherits
+   a populated record and becomes the next user. A **viral loop** attached to the
+   highest-value moment in homeownership, and the deepest moat. *Available now.*
+2. **Cost intelligence (Money-smart).** Steward logs real invoice amounts;
+   aggregated across the fleet it tells owners what a job *should* cost, flags a
+   high quote, and forecasts annual spend. *Compounds with every logged invoice.*
+3. **Failure prediction (Proactive).** System ages + conditions + fleet failure
+   curves → a ranked "what's about to break, and when." The anti-surprise promise
+   made predictive. *Compounds with fleet scale.*
+4. **Warranty & recall guardian (Proactive / Money-smart).** The equipment model
+   already stores make/model/serial: nudge before a warranty lapses, and match
+   equipment against public recall data (CPSC). Concrete dollars saved. *Buildable
+   now.*
+5. **Seasonal / weather-triggered readiness (Proactive).** Tie the schedule to
+   local weather ("hard freeze Thursday — here's your 20-minute winterization
+   list"). Turns a static schedule into timely prompts that drive re-engagement.
+   *Buildable now.*
+
+*Permit data is a silent input to the Effortless auto-build (it timestamps system
+installs), not a named feature — an owner already knows when they pull a permit.*
+
+---
+
+## 7. Revenue model
+
+Streams, in order of scale potential:
+
+1. **Enhanced subscriptions — the engine.** The ~$120 hero is the volume driver:
+   near-zero human cost, high margin, designed for mass adoption. This is where
+   the business scales.
+2. **Human-tier subscriptions (Guided, Managed).** Higher ARPU, lower volume;
+   trade margin for stickiness and referral volume.
+3. **Referral fees.** Network contractors pay Steward ~10–12% of invoice on
+   referred work, recorded and invoiced in a ledger. **Steward never processes
+   the owner's payment to the contractor.** The referral relationship is
+   disclosed; the fee *accounting* stays internal.
+4. **Intake fees.** One-time fees for the initial assessment on the human tiers.
 
 **Cost structure by tier:**
 
-- **Free** — near-zero marginal cost: no advisor, and the recommendation path
-  is the deterministic **rules-based engine** (free to run), not the AI path.
-  Its job is data capture and funnel volume, not revenue.
-- **Auto** — near-zero human cost; small per-lookup enrichment + per-suggestion
-  API cost. High margin. The AI does the work.
-- **Guided / Managed** — trade margin for stickiness and referral volume; cost
-  is advisor *time* (now re-pointed from dense site visits to validation +
-  coordination + response).
-- **Concierge** — a labor business with software leverage; bespoke pricing.
+- **Basic (Free)** — near-zero: no human, and the recommendation path is the
+  deterministic **rules engine** (free to run), not the AI path. Its job is data
+  capture and funnel volume, not revenue.
+- **Enhanced** — near-zero human cost; small per-lookup enrichment + AI cost.
+  High margin. The AI does the work. **This is the profit center.**
+- **Guided / Managed** — advisor *time* is the cost (validation, coordination,
+  response), re-pointed away from dense site visits.
 
-The economics lever moved from **"advisor hours vs. price"** to **"how much of
-the work is automated vs. human."** Free/Auto are the automated, high-margin
-funnel; Guided/Managed monetize human judgment and labor.
+The economics lever is **how much of the work is automated vs. human.** Free and
+Enhanced are the automated, high-margin funnel; Guided/Managed monetize human
+judgment and labor.
 
 ---
 
-## 7. The strategic bet: free-first, data flywheel
+## 8. The strategic bet: hero-tier-first, free as the lead magnet
 
-The strategy the tier model is built around:
+We design the **Enhanced hero first**, then take features away to define the
+free Basic tier — not the reverse. This produces a sharper product and an honest
+lead magnet instead of a hobbled free tier with paid bolted on.
 
-> **A true free tier acquires users and data at scale; the paid ladder
-> monetizes escalating automation and human help.**
-
-Why this fits Steward specifically — better than a typical freemium product:
-
-- **A real data network effect.** Steward's recommendation engine gets smarter
-  as more homes are documented: once many owners have, say, a gas water heater
-  and keep the same maintenance tasks, the advice for the next identical system
-  converges and improves. More users → better product for *every* user. A
-  compounding moat competitors can't buy.
-- **The asset is the corpus of Home Records**, not the software. Free-first is
-  the fastest way to accumulate it, and address-enrichment (§Auto) accelerates
-  it — every signup can seed a real record from public data.
-- **A natural upgrade path along one axis.** Free gives you the memory + a
-  schedule; Auto has AI build and watch it; Guided adds a human who validates;
-  Managed has a human run it. Each step is an obvious "do more of it for me."
-
-**The free/paid line is already architected.** The two recommendation code
-paths in `server/suggest.js` — the deterministic rule engine and the AI-backed
-path — map cleanly onto Free vs. paid. Free runs the rules engine (still
-improves with the fleet, costs nothing to run); paid unlocks the AI path.
-Export stays free at every tier — data ownership is a trust primitive, never a
-paywall.
-
-**The free-tier "aha."** The payoff for documenting a home must be immediate:
-the moment an owner finishes (or, at Auto, enters an address), Steward shows a
-personalized calendar of what's coming and roughly what it will cost. That
-single screen delivers peace of mind in minutes and justifies the effort — and
-it's the cleanest upsell in the model: **free shows you the plan; paid does the
-plan.**
+- **Basic (Free) is the lead magnet and the data-capture engine.** It gets homes
+  documented, feeds the fleet, and converts upward the moment an owner wants the
+  watching done for them.
+- **The free/paid line is already architected.** The two recommendation code
+  paths in `server/suggest.js` — the deterministic rule engine and the AI-backed
+  path — map cleanly onto Basic vs. Enhanced. No extra code is needed to draw the
+  line. **Export stays free at every tier** — data ownership is a trust
+  primitive, never a paywall.
+- **A real data network effect.** Steward's recommendations get smarter as more
+  homes are documented; cost intelligence and failure prediction *only exist*
+  because of fleet scale. More users → a better product for every user, and a
+  moat competitors can't buy.
+- **The aha that drives conversion.** The moment an owner sees a personalized
+  calendar of what's coming and what it will cost, the value is obvious — and the
+  upsell writes itself: **free shows you the plan; Enhanced runs it.**
 
 Two risks to manage deliberately:
 
-- **Price anchoring.** If the free tier feels complete, willingness to pay
-  drops. Keep the memory + schedule free; keep automation depth, the itemized
-  forecast, and human judgment/labor paid.
+- **Price anchoring.** Keep the memory + static schedule free; keep the
+  *delivered service* (proactive alerts, cost intelligence, warranty/recall,
+  auto-build) paid.
 - **Data quality & consent.** Self-entered data is noisy — the engine already
-  requires a minimum number of homes before it treats a pattern as a norm. And
-  using owners' (anonymized) data to improve everyone's recommendations
-  requires clear consent (see Data Privacy in the Technical doc).
-
-The moat is the accumulated records and the fleet-derived norms. Free-first is
-the accumulation strategy; the paid ladder is the monetization.
+  requires a minimum number of homes before it treats a pattern as a norm — and
+  using owners' (anonymized) data to improve everyone's recommendations requires
+  clear consent (see the Technical doc's privacy section).
 
 ---
 
-## 8. Operating principles (enforced, not aspirational)
+## 9. Operating principles (enforced, not aspirational)
 
-Steward runs on ten rules that are enforced in the software itself, which
-double as business commitments:
+Ten rules enforced in the software, which double as business commitments:
 
 1. **Owners own their data** — full export anytime, from the portal or API.
 2. **Market isolation** — staff only see their own market's clients.
-3. **Contractor gating** — no referral to a contractor without current license
-   and insurance; 90-day expiry warnings.
+3. **Contractor gating** — no referral without current license and insurance;
+   90-day expiry warnings.
 4. **Three-complaint rule** — a third complaint auto-moves a contractor to
    probation and flags it for founder review.
-5. **Never in the payment chain** — Steward records and bills referral fees;
-   it never processes owner→contractor payments.
+5. **Never in the payment chain** — Steward records and bills referral fees; it
+   never processes owner→contractor payments.
 6. **Fee transparency** — the referral relationship is disclosed to owners.
 7. **Records are permanent** — deleting a maintenance rule deactivates it;
    history is never destroyed.
@@ -280,42 +293,44 @@ double as business commitments:
 10. **Scope honesty** — every assessment is labeled an advisory walkthrough,
     **not a licensed home inspection.**
 
-These are trust primitives. For a business handling intimate data about
-people's homes, they are also marketing.
+These are trust primitives. For a business handling intimate data about people's
+homes, they are also marketing.
 
 ---
 
-## 9. Go-to-market notes
+## 10. Go-to-market notes
 
-- **Wedge:** the guided home assessment — ideally **address-first**. The lower
-  the friction to a populated Home Record, the more homes (and data) enter the
-  funnel. "Enter your address → here's a draft of your home" beats "type in all
-  your systems," and it produces the retention hook + data asset on day one.
-- **Geographic density matters.** The human tiers and the contractor network
-  are market-scoped (the model already isolates by market — e.g. Boston, LA).
-  Grow market-by-market so advisor utilization and network liquidity are real —
-  and civic permit data is richest in exactly those dense metros.
-- **Conversion triggers:** completeness nudges, seasonal check-ins, a new
-  permit detected on the address, and the moment an owner hits something they'd
-  rather hand off (a big repair, a warranty fight) — that's when Free/Auto
-  converts up to a human tier.
-- **Retention:** the schedule, seasonal cadence, and ongoing permit monitoring
-  give owners a recurring reason to return; the accumulating record raises
-  switching cost over time.
+- **Wedge:** the Enhanced "aha" — enter an address, get a home that's handled.
+  The lower the friction to a populated Home Record, the more homes (and data)
+  enter the funnel.
+- **Free Basic is the top of funnel**, not the destination. Instrument the path
+  Basic → Enhanced and nudge at high-intent moments (a new season, a system
+  aging into its failure window, a repair the owner would rather not think
+  about).
+- **Geographic density matters.** The human tiers and the contractor network are
+  market-scoped (the model isolates by market — e.g. Boston, LA); civic permit
+  data (the auto-build input) is also richest in dense metros. Grow
+  market-by-market.
+- **Retention:** delivered alerts, the seasonal cadence, and the accumulating
+  record give owners a recurring reason to stay and raise switching cost over
+  time.
 
 ---
 
-## 10. Key risks
+## 11. Key risks
 
 | Risk | Mitigation |
 |---|---|
-| Free users never convert | Keep judgment/labor paid; instrument the funnel; nudge at high-intent moments |
-| Self-entered data is too noisy to power good advice | Confidence floors on fleet norms; guided (not blank) data capture; photo/data-plate capture |
-| Advisor tiers don't scale (labor-bound) | Software leverage per advisor; density before expansion; SME model for the hard cases |
-| Contractor network quality erodes trust | Enforced gating, ratings, three-complaint rule already in the model |
-| Privacy misstep on intimate home data | Strong ownership/export primitives already shipped; formal policy + consent + deletion path needed (see Technical doc) |
+| Enhanced isn't compelling enough to be the #1 seller | Nail the three pillars, especially *delivered* proactivity; the free tier must feel passive by comparison |
+| Free users never convert | Keep the delivered service paid; instrument the funnel; nudge at high-intent moments |
+| Cost intelligence / failure prediction are thin at launch | They compound with data — lead with the buildable-now pillars (warranty/recall, seasonal, auto-build) and let the fleet features strengthen |
+| Self-entered data is too noisy | Confidence floors on fleet norms; auto-build from records; photo/data-plate capture |
+| No notification system exists yet | It's the backbone of "Proactive" — first thing to build (see §12) |
+| Privacy misstep on intimate home data | Strong ownership/export primitives shipped; formal policy + consent + deletion path + third-party disclosure needed (Technical doc) |
 
 ---
+
+## 12. Where the business stands today (build reality)
 
 ### What's built
 
@@ -326,28 +341,39 @@ people's homes, they are also marketing.
 - The **human-tier workflow** exists: intake, 60-second system capture, job
   completion, contractor network, ratings.
 - The **recommendation engine** already has the two paths (rules-based +
-  AI-backed) plus the fleet-learning loop — the exact mechanism the Free/paid
+  AI-backed) plus the fleet-learning loop — the exact mechanism the Basic/Enhanced
   split relies on.
 - The **founder console** covers operations (ARR/MRR, renewals, churn, the
   referral ledger, network health, the rules library).
 
-### The gap between the target model and the code
+### The gap between the target and the code
 
-The canonical tier model in §5 is the **target**. The shipped app still
-reflects the older shape, so wiring the two together is pending work:
-
-- `server/vocab.js` defines **Self-Serve $129 / Guided / Managed / Concierge**
-  with visit-count fields — not yet **Free / Auto / Guided / Managed** with the
-  new value axis.
-- The capital forecast gates at **Managed+**; the target puts it at **Auto+**.
-- **Address enrichment + permit monitoring** (the whole Auto tier) is **not yet
-  built** — see the Technical doc for where it plugs in.
+- `server/vocab.js` still defines **Self-Serve $129 / Guided / Managed /
+  Concierge** — not **Basic (Free) / Enhanced (~$120) / Guided ($500) / Managed
+  ($1,200)**.
+- The capital forecast gates at **Managed+**; the target puts the full forecast
+  at **Enhanced+**, with a headline number for Basic.
+- **No outbound notification system exists** — and *all* of the Proactive pillar
+  is delivered alerts. This is the backbone dependency.
+- **Address auto-build** (the Effortless pillar) is unbuilt.
 - **Growth analytics** (funnel, cohort retention, LTV/CAC, data-asset density)
-  is **not yet built** — the most valuable next reporting layer, and the
-  instrumentation needed to make the free-first bet with real numbers.
+  is unbuilt — the instrumentation to run the funnel by the numbers.
 
-The product is real and the data moat is architected. The next milestones, in
-rough order: **(1) address enrichment + permit monitoring** (unlocks Auto and
-kills onboarding friction), **(2) growth instrumentation** (to run the
-free-first funnel by the numbers), and **(3) rewiring the tier definitions**
-(Free/Auto split, prices, forecast gate) into the code.
+### Build sequence (both tracks from the start)
+
+Per the decision to pursue automation and delivered-service in parallel:
+
+- **Track A — Effortless (auto-build):** address enrichment pipeline (geocode →
+  property data → civic permit adapters → LLM extraction → confirm). Proof of
+  concept against Boston open data first.
+- **Track B — Proactive + Money-smart (the recurring value):**
+  1. **Notification/delivery mechanism** — the backbone; nothing "proactive"
+     ships without it.
+  2. **Warranty & recall guardian + seasonal/weather nudges** — buildable now.
+  3. **Cost intelligence + failure prediction** — compound as the fleet grows.
+- **Cross-cutting:** rewire the tiers (Basic/Enhanced/Guided/Managed, prices,
+  the AI-path + forecast gates) into `server/vocab.js`; then growth
+  instrumentation.
+
+The product is real and the data moat is architected. The next milestones are
+the two tracks above, converging on **Enhanced as the #1 seller**.

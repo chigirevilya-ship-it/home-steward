@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const { open, audit, today, FILES_DIR } = require('./db');
 const rulesEngine = require('./rules-engine');
 const { suggest, recordFeedback } = require('./suggest');
+const { enrichAddress } = require('./enrich');
 const { SYSTEM_CATEGORIES, TIERS, isSelfManaged, isBasic, BASIC_DOC_CAP, SCOPE_DISCLAIMER } = require('./vocab');
 const { sendJson, sendError, readJson, readBody, pick, MAX_FILE_BODY } = require('./http-util');
 
@@ -284,6 +285,65 @@ route('POST', /^\/api\/portal\/property$/, async (req, res, { session }) => {
   ).run(...cols.map((c) => body[c]), client.id, client.market_id, today(), 25).lastInsertRowid;
   audit('client', client.id, 'create', 'properties', id, `self-serve onboarding: ${body.address_line1}`);
   sendJson(res, 201, pick(db.prepare('SELECT * FROM properties WHERE id = ?').get(id), VISIBLE.property));
+});
+
+// ── Address enrichment (Track A — "Effortless" auto-build) ─────────────────
+// Draft a Home Record from public permit records. Preview only (no writes);
+// the owner confirms before anything is created via /enrich/apply. Available
+// to self-managed tiers — lowering onboarding friction grows the data corpus.
+route('POST', /^\/api\/portal\/enrich$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const body = await readJson(req);
+  const address = String(body.address || '').trim();
+  if (address.length < 5) return sendError(res, 400, 'Enter a full street address');
+  const draft = await enrichAddress(address);
+  audit('client', client.id, 'create', null, null, `address enrich (${draft.source}) for ${address}`);
+  sendJson(res, 200, draft);
+});
+
+// Apply a confirmed draft: create the property, its systems, and its permits,
+// then run the rules engine. Onboarding only (no existing home).
+route('POST', /^\/api\/portal\/enrich\/apply$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  assertSelfServe(client);
+  const db = open();
+  if (db.prepare('SELECT id FROM properties WHERE client_id = ? AND active = 1').get(client.id)) {
+    return sendError(res, 409, 'You already have a home on record');
+  }
+  const body = await readJson(req);
+  const prop = body.property || {};
+  if (!prop.address_line1) return sendError(res, 400, 'Address is required');
+  const pcols = PROPERTY_WRITE.filter((c) => prop[c] !== undefined && prop[c] !== null);
+  const propertyId = db.prepare(
+    `INSERT INTO properties (${pcols.join(',')}${pcols.length ? ',' : ''}client_id, market_id, intake_date, record_completeness, active)
+     VALUES (${pcols.map(() => '?').join(',')}${pcols.length ? ',' : ''}?,?,?,?,1)`
+  ).run(...pcols.map((c) => prop[c]), client.id, client.market_id, today(), 40).lastInsertRowid;
+
+  let sysN = 0;
+  for (const s of Array.isArray(body.systems) ? body.systems : []) {
+    if (!s.system_name || !SYSTEM_CATEGORIES.includes(s.category)) continue;
+    db.prepare(
+      `INSERT INTO systems (system_name, property_id, category, description, install_date, expected_lifespan, active)
+       VALUES (?,?,?,?,?,?,1)`
+    ).run(s.system_name, propertyId, s.category, s.description ?? null, s.install_date ?? null, s.expected_lifespan ?? null);
+    sysN++;
+  }
+  let permitN = 0;
+  for (const p of Array.isArray(body.permits) ? body.permits : []) {
+    if (!p.permit_number && !p.scope_description) continue;
+    db.prepare(
+      `INSERT INTO permits (property_id, permit_number, date_filed, date_finaled, status, permit_type, scope_description, contractor_of_record)
+       VALUES (?,?,?,?,?,?,?,?)`
+    ).run(propertyId, p.permit_number ?? null, p.date_filed ?? null, p.date_finaled ?? null,
+      PERMIT_STATUS.includes(p.status) ? p.status : 'unknown',
+      PERMIT_TYPES.includes(p.permit_type) ? p.permit_type : 'other',
+      p.scope_description ?? null, p.contractor_of_record ?? null);
+    permitN++;
+  }
+  const gen = rulesEngine.generateForProperty(propertyId, { kind: 'client', id: client.id });
+  audit('client', client.id, 'create', 'properties', propertyId, `auto-built from address: ${sysN} systems, ${permitN} permits`);
+  sendJson(res, 201, { property_id: propertyId, systems: sysN, permits: permitN, generated_items: gen.created });
 });
 
 route('POST', /^\/api\/portal\/systems$/, async (req, res, { session }) => {

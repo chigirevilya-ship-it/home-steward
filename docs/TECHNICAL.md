@@ -221,12 +221,24 @@ save as PDF), including systems, schedule, full history, permits, and — at
 eligible tiers — the capital forecast. This is the owner's portable,
 transferable artifact and a core data-ownership guarantee.
 
-### 5.7 Address enrichment (planned — the Enhanced "Effortless" pillar)
+### 5.7 Address enrichment (Track A — the Enhanced "Effortless" pillar)
 
-The highest-leverage planned addition and **Track A** of the build: turn
-onboarding from "type in your house" into "enter your address, confirm the
-draft." It also *strengthens* the data model — public records timestamp system
-installs, which directly seed the schedule.
+**Proof of concept built** (`server/enrich.js` + `server/enrich-fixtures.js`,
+wired into onboarding). Turns onboarding from "type in your house" into "enter
+your address, confirm the draft." It also *strengthens* the data model — public
+records timestamp system installs, which directly seed the schedule.
+
+**What's built:** the deterministic permit→system classifier, the Boston CKAN +
+Census adapters (live when the network allows), a bundled fixture of
+real-shaped Boston permit records for offline/demo, and the onboarding flow —
+`POST /api/portal/enrich` (preview draft) and `POST /api/portal/enrich/apply`
+(create property + systems + permits, run the engine). Same graceful-
+degradation posture as `suggest.js`: live civic APIs when reachable, fixtures
+otherwise, so the whole flow is testable with no network and no API key.
+**Still to do:** the commercial property-data adapter (year built / sq ft),
+more city adapters beyond Boston, caching lookups to the DB, and gating the
+feature to Enhanced in production (it's open to self-managed tiers now to
+maximize onboarding data capture).
 
 **Architecture — a pluggable enrichment service run at onboarding**
 (address in → draft Home Record out):
@@ -456,9 +468,9 @@ service at once).
 
 **Track A — Effortless (auto-build):**
 
-- **Address enrichment** (§5.7) — geocode → property data → civic permit
-  adapters → LLM extraction → confirm. Kills onboarding friction and seeds
-  records from public data. Start with a Boston open-data proof of concept.
+- **Address enrichment** (§5.7) — **proof of concept shipped** (Boston
+  fixture + live-ready adapters, wired into onboarding). Remaining: commercial
+  property-data adapter, more cities, DB caching, Enhanced gating.
 
 **Track B — Proactive + Money-smart (the recurring value):**
 

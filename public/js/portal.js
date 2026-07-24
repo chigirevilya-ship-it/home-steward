@@ -40,7 +40,18 @@ function renderOnboarding(view, r) {
   </div></div>
   ${r.self_serve ? `
   <div class="card card-pad" style="max-width:720px">
-    <h2 class="serif" style="margin-bottom:14px">Step 1 of 2 — Your home</h2>
+    <h2 class="serif" style="margin-bottom:6px">Start with your address</h2>
+    <p class="sub" style="margin-bottom:12px">Steward can draft your home from public permit records — systems, install
+    dates, and permit history — so you just confirm instead of typing it all in.</p>
+    <div class="form-grid">
+      <div class="span2">${field('enrich_address', 'Full street address', input(`placeholder="35 Sample St, Boston, MA 02130"`))}</div>
+    </div>
+    <div class="form-actions"><button class="btn btn-primary" id="ob-enrich">✨ Build from my address</button></div>
+    <p class="small muted" style="margin-top:8px">Best coverage in cities with open permit data. Try
+    <code>35 Sample St, Boston, MA 02130</code> or <code>88 Example Ave, Boston, MA 02127</code>.</p>
+  </div>
+  <details class="section" style="max-width:720px"><summary class="small" style="cursor:pointer">…or enter your home manually</summary>
+  <div class="card card-pad" style="margin-top:10px">
     <div class="form-grid">
       <div class="span2">${field('address_line1', 'Street address', input(`placeholder="86 Winter Hill Ave"`))}</div>
       ${field('city', 'City', input())}
@@ -57,18 +68,79 @@ function renderOnboarding(view, r) {
       ${field('ownership_date', 'You’ve owned it since', input(`type="date"`))}
     </div>
     <div class="form-actions"><button class="btn btn-primary" id="ob-save">Create my Home Record</button></div>
-  </div>
-  <p class="small muted section" style="max-width:720px">Step 2 adds your home’s systems — furnace, water heater, roof —
-  and generates your maintenance schedule. Guessing an age is fine; you can refine everything later.</p>`
+  </div></details>`
   : `<div class="card">${empty('No home on record yet — your advisor is on it.')}</div>`}`;
+
+  $('#ob-enrich', view)?.addEventListener('click', async () => {
+    const address = $('[name=enrich_address]', view)?.value.trim();
+    if (!address || address.length < 5) return toast('Enter a full street address', 'err');
+    const btn = $('#ob-enrich', view);
+    btn.disabled = true; btn.textContent = 'Looking up public records…';
+    try {
+      const draft = await api('/api/portal/enrich', { method: 'POST', body: { address } });
+      renderEnrichDraft(view, r, draft);
+    } catch (err) { toast(err.message, 'err'); btn.disabled = false; btn.textContent = '✨ Build from my address'; }
+  });
 
   $('#ob-save', view)?.addEventListener('click', async () => {
     const body = formValues(view);
     if (!body.address_line1) return toast('Enter your street address', 'err');
+    delete body.enrich_address;
     try {
       await api('/api/portal/property', { method: 'POST', body });
       invalidate();
       toast('Home created — now add your systems');
+      location.hash = '#/systems';
+      renderSystems($('#view'));
+    } catch (err) { toast(err.message, 'err'); }
+  });
+}
+
+// Review step for the address auto-build: confirm the drafted property,
+// systems, and permits (uncheck anything wrong) before creating the record.
+function renderEnrichDraft(view, r, draft) {
+  const p = draft.property || {};
+  view.innerHTML = `
+  <div class="page-head"><div>
+    <h1>Here’s your home, ${esc(r.client.first_name)}</h1>
+    <div class="sub">Drafted from ${draft.source === 'fixture' ? 'sample' : 'public'} permit records for
+    ${esc(p.address_line1 || draft.address)}. Uncheck anything that’s wrong, then create your record.</div>
+  </div></div>
+  ${draft.source === 'none' ? `<div class="notice section" style="max-width:760px">${esc(draft.note || 'No public records found — enter your home manually instead.')}</div>` : ''}
+  <div class="card card-pad" style="max-width:760px">
+    <h3>Your home</h3>
+    <dl class="kv small" style="margin-top:6px">
+      <dt>Address</dt><dd>${esc([p.address_line1, p.city, p.state, p.zip].filter(Boolean).join(', ')) || '—'}</dd>
+      <dt>Type</dt><dd>${p.property_type ? label(p.property_type) : '—'}</dd>
+      <dt>Built</dt><dd>${p.year_built ?? '—'}</dd>
+    </dl>
+    <hr class="divider">
+    <h3>Systems found (${draft.systems.length})</h3>
+    ${draft.systems.map((s, i) => `<label class="checkbox-row" style="align-items:flex-start">
+      <input type="checkbox" data-sys="${i}" checked style="margin-top:3px">
+      <span><b>${esc(s.system_name)}</b> <span class="chip">${esc(s.category)}</span>
+        <span class="small muted">${s.install_date ? 'installed ' + fmtDate(s.install_date) : ''}${s.expected_lifespan ? ` · ~${s.expected_lifespan} yr life` : ''}</span></span>
+    </label>`).join('') || empty('No systems detected from permits.')}
+    <hr class="divider">
+    <h3>Permit history (${draft.permits.length})</h3>
+    ${draft.permits.map((pm, i) => `<label class="checkbox-row" style="align-items:flex-start">
+      <input type="checkbox" data-permit="${i}" checked style="margin-top:3px">
+      <span>${esc(pm.permit_number || '—')} <span class="small muted">${esc((pm.scope_description || '').slice(0, 80))}</span></span>
+    </label>`).join('') || empty('No permits found.')}
+    <div class="form-actions">
+      <button class="btn" id="ed-back">Back</button>
+      <button class="btn btn-primary" id="ed-create">Create my Home Record</button>
+    </div>
+  </div>`;
+
+  $('#ed-back', view).addEventListener('click', () => renderOnboarding(view, r));
+  $('#ed-create', view).addEventListener('click', async () => {
+    const systems = draft.systems.filter((_, i) => $(`[data-sys="${i}"]`, view)?.checked);
+    const permits = draft.permits.filter((_, i) => $(`[data-permit="${i}"]`, view)?.checked);
+    try {
+      const res = await api('/api/portal/enrich/apply', { method: 'POST', body: { property: draft.property, systems, permits } });
+      invalidate();
+      toast(`Home created — ${res.systems} systems, ${res.permits} permits, ${res.generated_items} scheduled`);
       location.hash = '#/systems';
       renderSystems($('#view'));
     } catch (err) { toast(err.message, 'err'); }

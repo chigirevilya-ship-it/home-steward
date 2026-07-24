@@ -483,10 +483,10 @@ function seed({ reset = false } = {}) {
   mkIntakeFee.run(hassan, pHas, 375, rel(-250), 'ACH', 1, rel(-240));
   mkIntakeFee.run(alvarez, pAlv, 375, rel(-340), 'ACH', 1, rel(-330));
 
-  // ── Self-Serve demo (US-S1/S2): software only, no advisor, no intake ──
+  // ── Enhanced demo (US-S1/S2): the paid hero — AI-driven, no advisor ──
   const taylor = mkClient.run('Taylor', 'Brooks', 'taylor@client.demo', '617-555-0207', 'email',
-    BOS, null, 'self_serve', rel(-60), rel(305), 129, 0, 0, null,
-    'self_serve_signup', 'active', null, clientPw).lastInsertRowid;
+    BOS, null, 'enhanced', rel(-60), rel(305), 120, 0, 0, null,
+    'basic_signup', 'active', null, clientPw).lastInsertRowid;
   const pTaylor = mkProp.run('86 Winter Hill Ave', 'Somerville', 'MA', '02145', taylor, BOS,
     1998, 1650, 2, 3, 1.5, 'townhouse', 'wood_frame', 'poured_concrete', rel(-1500),
     null, rel(-58), null, 40,
@@ -513,7 +513,7 @@ function seed({ reset = false } = {}) {
   mkEquip.run(pTaylor, sysMini, 'Living-room head', null, 'Mitsubishi', 'MSZ-GL15NA', null, yearsAgo(6), 15, null, 4, null);
   mkEquip.run(pTaylor, sysMini, 'Bedroom head', 'Rattles on start-up — on the list to swap.', 'Mitsubishi', 'MSZ-GL09NA', null,
     yearsAgo(6), 15, null, 2, null);
-  mkSub.run(taylor, rel(-60), rel(305), 'self_serve', 129, 'payments bypassed (demo)', rel(-60), 'Card', 'paid');
+  mkSub.run(taylor, rel(-60), rel(305), 'enhanced', 120, 'payments bypassed (demo)', rel(-60), 'Card', 'paid');
   const eqGen = mkEquip.run(pTaylor, null, 'Portable generator', 'Kept in garage for outages; self-entered.', 'Honda', 'EU2200i', null,
     yearsAgo(3), 12, rel(200), 4, null).lastInsertRowid;
 
@@ -572,6 +572,19 @@ function seed({ reset = false } = {}) {
     'City of Somerville — Plumbing Permit SOM-2023-1187\nScope: water heater replacement\nStatus: FINALED · final inspection passed\n');
   mkDoc.run('Water heater permit (SOM-2023-1187)', 'permit_doc', f.rel, 'text/plain', f.size, pTaylor, null, null, null, taylorPermit,
     'Plumbing permit for the water-heater replacement.', rel(-360), null, taylor);
+
+  // ── Basic (free) demo: manual record, rules-based schedule, no advisor ──
+  const sam = mkClient.run('Sam', 'Rivera', 'sam@client.demo', '617-555-0808', 'email',
+    BOS, null, 'basic', rel(-8), rel(357), 0, 0, 0, null,
+    'basic_signup', 'active', null, clientPw).lastInsertRowid;
+  const pSam = mkProp.run('12 Maple Ct', 'Medford', 'MA', '02155', sam, BOS,
+    1972, 1400, 1, 3, 1, 'single_family', 'wood_frame', 'poured_concrete', rel(-900),
+    null, rel(-8), null, 20, null).lastInsertRowid;
+  mkSys.run('Gas furnace', pSam, 'HVAC - Heating', 'Basement, original to a 2005 reno.',
+    yearsAgo(18), null, 20, 3, null, null, null, null, 0, null);
+  mkSys.run('Gas water heater', pSam, 'Water Heater - Gas', '50-gal tank.',
+    yearsAgo(9), null, 12, 3, null, null, null, null, 0, null);
+  mkSub.run(sam, rel(-8), rel(357), 'basic', 0, 'free tier', rel(-8), null, 'paid');
 
   // ── Client request (portal) ────────────────────────────────────────────
   ins(`INSERT INTO client_requests (client_id, property_id, created_at, subject, body, status) VALUES (?,?,?,?,?,?)`)
@@ -633,7 +646,7 @@ function seed({ reset = false } = {}) {
     `${db.prepare('SELECT COUNT(*) n FROM forward_schedule').get().n} schedule items (${gen.created} rule-generated).`);
   console.log('Logins — staff: founder@steward.demo / marcus@ / elena@ / dana@ / priya@steward.demo (steward123)');
   console.log('         clients: sarah@ / james@ / mia@ / nadia@ / victor@client.demo (welcome123)');
-  console.log('         self-serve demo: taylor@client.demo (welcome123)');
+  console.log('         Enhanced (paid hero): taylor@client.demo · Basic (free): sam@client.demo (welcome123)');
   return true;
 }
 

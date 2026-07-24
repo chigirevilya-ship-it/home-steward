@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const { open, audit, today, FILES_DIR } = require('./db');
 const rulesEngine = require('./rules-engine');
 const { suggest, recordFeedback } = require('./suggest');
-const { SYSTEM_CATEGORIES, TIERS, SCOPE_DISCLAIMER } = require('./vocab');
+const { SYSTEM_CATEGORIES, TIERS, isSelfManaged, isBasic, BASIC_DOC_CAP, SCOPE_DISCLAIMER } = require('./vocab');
 const { sendJson, sendError, readJson, readBody, pick, MAX_FILE_BODY } = require('./http-util');
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -145,16 +145,22 @@ function buildPortalRecord(client, property) {
      WHERE d.property_id = ? ORDER BY d.upload_date DESC`).all(pid)
     .map((r) => pick(r, VISIBLE.document));
 
-  // Capital forecast is tier-scoped: Managed + Concierge only (business rule #8).
-  const forecastEligible = ['managed', 'concierge'].includes(client.tier);
-  const forecast = forecastEligible
-    ? db.prepare(
-        `SELECT f.item_name, f.due_date, f.est_cost_low, f.est_cost_high, s.system_name
-         FROM forward_schedule f LEFT JOIN systems s ON s.id = f.system_id
-         WHERE f.property_id = ? AND f.capital_forecast_item = 1 AND f.status IN ('upcoming','scheduled')
-         ORDER BY f.due_date`).all(pid)
-        .map((r) => ({ ...r, est_year: r.due_date ? Number(r.due_date.slice(0, 4)) : null }))
-    : null;
+  // Capital forecast (business rule #8, retargeted): the full itemized forecast
+  // is Enhanced and up; Basic (free) sees only a headline number. The line
+  // items are computed once, then exposed or summarized by tier.
+  const forecastItems = db.prepare(
+    `SELECT f.item_name, f.due_date, f.est_cost_low, f.est_cost_high, s.system_name
+     FROM forward_schedule f LEFT JOIN systems s ON s.id = f.system_id
+     WHERE f.property_id = ? AND f.capital_forecast_item = 1 AND f.status IN ('upcoming','scheduled')
+     ORDER BY f.due_date`).all(pid)
+    .map((r) => ({ ...r, est_year: r.due_date ? Number(r.due_date.slice(0, 4)) : null }));
+  const forecastHeadline = {
+    count: forecastItems.length,
+    low: forecastItems.reduce((s, f) => s + (f.est_cost_low || 0), 0),
+    high: forecastItems.reduce((s, f) => s + (f.est_cost_high || 0), 0),
+  };
+  const forecastEligible = !isBasic(client.tier);
+  const forecast = forecastEligible ? forecastItems : null;
 
   const advisor = client.advisor_id
     ? open().prepare('SELECT full_name, email, phone FROM users WHERE id = ?').get(client.advisor_id)
@@ -164,7 +170,9 @@ function buildPortalRecord(client, property) {
     client: pick(client, ['id','first_name','last_name','email','phone','preferred_contact','tier',
       'subscription_start','subscription_renewal','charter_member','status']),
     tier_label: TIERS[client.tier]?.label || client.tier,
-    self_serve: client.tier === 'self_serve',
+    self_serve: isSelfManaged(client.tier),
+    is_basic: isBasic(client.tier),
+    enhanced_price: TIERS.enhanced.price,
     categories: SYSTEM_CATEGORIES,
     warranty_flags: equipment.filter((e) => ['expired', 'expiring'].includes(e.warranty_status))
       .map((e) => ({ id: e.id, name: e.name, warranty_expiry: e.warranty_expiry, status: e.warranty_status })),
@@ -172,7 +180,7 @@ function buildPortalRecord(client, property) {
     property: pick(property, VISIBLE.property),
     properties_count: undefined,
     systems, schedule, log, permits, visits, contractors, documents,
-    forecast, forecast_eligible: forecastEligible,
+    forecast, forecast_eligible: forecastEligible, forecast_headline: forecastHeadline,
     fee_disclosure: 'Steward receives a referral fee from network contractors, paid by the contractor and disclosed in your service agreement. You are never charged more because of it.',
     disclaimer: SCOPE_DISCLAIMER,
     today: t,
@@ -197,7 +205,8 @@ route('GET', /^\/api\/portal\/record$/, async (req, res, { session, query }) => 
   if (!hasProperty) {
     return sendJson(res, 200, {
       needs_onboarding: true,
-      self_serve: client.tier === 'self_serve',
+      self_serve: isSelfManaged(client.tier),
+      is_basic: isBasic(client.tier),
       client: pick(client, ['id','first_name','last_name','email','tier']),
       tier_label: TIERS[client.tier]?.label || client.tier,
       categories: SYSTEM_CATEGORIES,
@@ -244,10 +253,13 @@ route('POST', /^\/api\/portal\/requests$/, async (req, res, { session }) => {
 // Only self_serve clients may write to their own record; on advisor tiers the
 // advisor is the author of the Home Record and the portal stays read-only.
 
+// Self-managed tiers (Basic, Enhanced, legacy Self-Serve) build their own
+// record; on the human tiers the advisor is the author and the portal is
+// read-only.
 function assertSelfServe(client) {
-  if (client.tier !== 'self_serve') {
+  if (!isSelfManaged(client.tier)) {
     throw Object.assign(new Error(
-      'Record editing is a Self-Serve feature — on your membership, your advisor maintains the Home Record for you.'), { status: 403 });
+      'Record editing is a self-managed feature — on your membership, your advisor maintains the Home Record for you.'), { status: 403 });
   }
 }
 
@@ -737,8 +749,9 @@ route('POST', /^\/api\/portal\/suggest$/, async (req, res, { session }) => {
     install_date: body.install_date, age_at_intake: body.age_at_intake, expected_lifespan: body.expected_lifespan,
     warranty_expiry: body.warranty_expiry, last_service_date: body.last_service_date,
     condition_rating: body.condition_rating, description: body.description,
-  }, property, related);
-  audit('client', client.id, 'create', null, null, `AI suggestion (${result.source}) for ${body.name || body.category}`);
+  }, property, related, { allowAI: !isBasic(client.tier) });
+  result.upgrade = isBasic(client.tier); // Basic gets rules-based; nudge to Enhanced
+  audit('client', client.id, 'create', null, null, `suggestion (${result.source}) for ${body.name || body.category}`);
   sendJson(res, 200, result);
 });
 
@@ -756,6 +769,23 @@ route('POST', /^\/api\/portal\/suggest\/accept$/, async (req, res, { session }) 
     category: body.category, make: body.make,
   }, tasks, body.source, client.id, property.id);
   sendJson(res, 200, { recorded });
+});
+
+// Self-upgrade Basic → Enhanced. Payments are bypassed in this build (same
+// posture as open signup), so it flips the tier and refreshes the subscription.
+route('POST', /^\/api\/portal\/upgrade$/, async (req, res, { session }) => {
+  const client = getClient(session);
+  if (client.tier !== 'basic') return sendError(res, 400, 'Only Basic accounts can self-upgrade to Enhanced.');
+  const db = open();
+  const now = today();
+  const renewal = new Date(Date.now() + 365 * DAY).toISOString().slice(0, 10);
+  db.prepare('UPDATE clients SET tier = ?, annual_rate = ?, subscription_start = COALESCE(subscription_start, ?), subscription_renewal = ? WHERE id = ?')
+    .run('enhanced', TIERS.enhanced.price, now, renewal, client.id);
+  db.prepare(`INSERT INTO subscriptions (client_id, period_start, period_end, tier, annual_amount, discount_applied, payment_date, payment_method, status)
+    VALUES (?,?,?, 'enhanced', ?, 'payments bypassed (demo)', ?, 'Card', 'paid')`)
+    .run(client.id, now, renewal, TIERS.enhanced.price, now);
+  audit('client', client.id, 'update', 'clients', client.id, 'upgraded basic → enhanced');
+  sendJson(res, 200, { tier: 'enhanced' });
 });
 
 route('DELETE', /^\/api\/portal\/tasks\/(\d+)$/, async (req, res, { session, params }) => {
@@ -863,6 +893,13 @@ route('POST', /^\/api\/portal\/documents$/, async (req, res, { session, query })
   if (!buf.length) return sendError(res, 400, 'Empty upload');
 
   const db = open();
+  // Basic (free) tier has a document storage cap; Enhanced and up are unlimited.
+  if (isBasic(client.tier)) {
+    const used = db.prepare('SELECT COUNT(*) n FROM documents WHERE property_id = ?').get(property.id).n;
+    if (used >= BASIC_DOC_CAP) {
+      return sendError(res, 403, `Basic includes ${BASIC_DOC_CAP} documents. Upgrade to Enhanced for unlimited storage.`);
+    }
+  }
   // Optional relates-to links, each verified against the client's own home.
   const systemId = Number(query.get('system_id')) || null;
   const equipmentId = Number(query.get('equipment_id')) || null;

@@ -663,7 +663,9 @@ function bindSuggest(m, r, kind, existing, saveItem, done) {
       const panel = $('#sg-panel', m.body);
       panel.style.display = 'block';
       panel.innerHTML = `
-        <h4>${sg.source === 'ai' ? '✨ AI suggestions' : 'Suggestions from the maintenance library'}</h4>
+        <h4>${sg.source === 'ai' ? '✨ Steward’s recommendations' : 'Suggestions from the maintenance library'}</h4>
+        ${sg.upgrade ? `<div class="notice" style="margin-bottom:8px">These are library suggestions.
+          <a href="#" id="sg-enh">Upgrade to Enhanced</a> for recommendations tailored to this exact system by Steward’s AI.</div>` : ''}
         ${fleet.similar_homes ? `<div class="small muted" style="margin-bottom:6px">${fleet.from_feedback
           ? `Learned from ${fleet.similar_homes} similar home${fleet.similar_homes === 1 ? '' : 's'}`
           : `Consistent with ${fleet.similar_homes} similar home${fleet.similar_homes === 1 ? '' : 's'}`} in the Steward network.</div>` : ''}
@@ -679,6 +681,11 @@ function bindSuggest(m, r, kind, existing, saveItem, done) {
           </label>`).join('')}
           <button type="button" class="btn btn-primary btn-sm" id="sg-add-tasks">Save & add selected tasks</button>`
           : '<div class="small muted">No task suggestions for this category.</div>'}`;
+      $('#sg-enh', panel)?.addEventListener('click', (e) => {
+        e.preventDefault();
+        m.close();
+        upgradeToEnhanced(() => { location.hash = '#/home'; renderOverview($('#view')); });
+      });
       $('#sg-use-desc', panel)?.addEventListener('click', () => {
         const descField = $('[name=description]', m.body);
         if (descField) descField.value = sg.description;
@@ -725,10 +732,21 @@ function bindSuggest(m, r, kind, existing, saveItem, done) {
 
 async function sendUpgradeRequest() {
   await api('/api/portal/requests', { method: 'POST', body: {
-    subject: 'Upgrade request: Self-Serve → Guided',
+    subject: 'Upgrade request: → Guided',
     body: 'I’d like to upgrade to an advisor membership. Please contact me to book an intake visit that validates and completes my Home Record.',
   } });
   toast('Request sent — a Steward advisor will reach out to book your intake');
+}
+
+// Basic → Enhanced self-upgrade (payments bypassed in this build). Unlocks the
+// AI-tailored recommendations and the full itemized capital forecast.
+async function upgradeToEnhanced(rerender) {
+  try {
+    await api('/api/portal/upgrade', { method: 'POST', body: {} });
+    invalidate();
+    toast('Welcome to Enhanced — AI recommendations and the full forecast are unlocked');
+    rerender ? rerender() : (location.hash = '#/home');
+  } catch (err) { toast(err.message, 'err'); }
 }
 
 // ── Overview (US-C1) ───────────────────────────────────────────────────────
@@ -763,11 +781,18 @@ export async function renderOverview(view) {
     <div class="card card-pad">
       ${r.self_serve ? `
       <h2 class="serif">Your membership</h2>
-      <p style="font:400 20px var(--serif);margin:8px 0 2px">Self-Serve</p>
-      <div class="sub">You maintain your own Home Record; the maintenance engine keeps your schedule.</div>
-      <div class="small muted" style="margin-top:10px">Want a named advisor who documents your home, stays ahead of
-      its needs, and brings a vetted contractor network? Your record comes with you.</div>
-      <div style="margin-top:12px"><button class="btn btn-primary btn-sm" id="upgrade-btn">Upgrade — book an advisor intake</button></div>`
+      <p style="font:400 20px var(--serif);margin:8px 0 2px">${esc(r.tier_label)}</p>
+      ${r.is_basic ? `
+      <div class="sub">You’re on the free plan — you keep your own record and get a rules-based schedule.</div>
+      <div class="small muted" style="margin-top:10px"><b>Enhanced</b> hands the work to Steward: AI-tailored
+      recommendations, the full 5-year capital forecast, and unlimited storage.</div>
+      <div style="margin-top:12px"><button class="btn btn-primary btn-sm" id="enh-upgrade">Upgrade to Enhanced — $${r.enhanced_price}/yr</button></div>
+      <div class="small muted" style="margin-top:10px">Want a named human advisor too? <a href="#" id="advisor-upgrade">See Guided &amp; Managed</a>.</div>`
+      : `
+      <div class="sub">You maintain your Home Record; Steward’s AI keeps your schedule and recommendations sharp.</div>
+      <div class="small muted" style="margin-top:10px">Want a named advisor who validates your home and brings a vetted
+      contractor network? Your record comes with you.</div>
+      <div style="margin-top:12px"><button class="btn btn-primary btn-sm" id="upgrade-btn">Upgrade — book an advisor intake</button></div>`}`
       : `
       <h2 class="serif">Your advisor</h2>
       ${r.advisor ? `
@@ -804,6 +829,8 @@ export async function renderOverview(view) {
   <div class="disclaimer">${esc(r.disclaimer)}</div>`;
 
   $('#upgrade-btn', view)?.addEventListener('click', sendUpgradeRequest);
+  $('#enh-upgrade', view)?.addEventListener('click', () => upgradeToEnhanced(() => renderOverview(view)));
+  $('#advisor-upgrade', view)?.addEventListener('click', (e) => { e.preventDefault(); sendUpgradeRequest(); });
   loadRequests(view);
   $('#request-form', view).addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1111,15 +1138,20 @@ export async function renderForecast(view) {
   const r = await record();
   if (needsOnboarding(r)) return renderOnboarding(view, r);
   if (!r.forecast_eligible) {
+    // Basic (free): show the headline number, gate the itemized plan behind Enhanced.
+    const h = r.forecast_headline || { count: 0, low: 0, high: 0 };
     view.innerHTML = `${head(r, 'Capital Forecast')}
     <div class="card card-pad" style="max-width:640px">
-      <h2 class="serif">Included with Managed and Concierge membership</h2>
-      <p class="sub" style="margin-top:8px">The five-year capital forecast maps every major system to its expected
-      replacement year and cost range — so a new roof or boiler never arrives as a surprise.
-      ${r.self_serve ? '' : 'Ask your advisor about upgrading your membership.'}</p>
-      ${r.self_serve ? '<div style="margin-top:12px"><button class="btn btn-primary btn-sm" id="upgrade-btn">Upgrade — book an advisor intake</button></div>' : ''}
+      <div class="tiles">
+        ${statTile(h.count, 'major expenses on the horizon', 'brand')}
+        ${statTile(moneyRange(h.low, h.high), 'estimated 5-year range')}
+      </div>
+      <h2 class="serif" style="margin-top:18px">See the full plan with Enhanced</h2>
+      <p class="sub" style="margin-top:8px">Basic gives you the headline number. Enhanced breaks it down system by
+      system — every major expense, its expected year, and cost range — so a new roof or boiler never arrives as a surprise.</p>
+      <div style="margin-top:14px"><button class="btn btn-primary" id="enh-btn">Upgrade to Enhanced — $${r.enhanced_price}/yr</button></div>
     </div>`;
-    $('#upgrade-btn', view)?.addEventListener('click', sendUpgradeRequest);
+    $('#enh-btn', view)?.addEventListener('click', () => upgradeToEnhanced(() => renderForecast(view)));
     return;
   }
   const lo = r.forecast.reduce((s, f) => s + (f.est_cost_low || 0), 0);

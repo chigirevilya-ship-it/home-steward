@@ -23,14 +23,30 @@ const TRADES = [
 ];
 
 const TIERS = {
+  basic:      { label: 'Basic',      price: 0,    advisor_hrs: 0,   visits_per_year: 0 },
+  enhanced:   { label: 'Enhanced',   price: 120,  advisor_hrs: 0,   visits_per_year: 0 },
   guided:     { label: 'Guided',     price: 500,  advisor_hrs: 2.5, visits_per_year: 1 },
   managed:    { label: 'Managed',    price: 1200, advisor_hrs: 7,   visits_per_year: 2 },
-  concierge:  { label: 'Concierge',  price: 2500, advisor_hrs: 26,  visits_per_year: 4 },
-  self_serve: { label: 'Self-Serve', price: 129,  advisor_hrs: 0,   visits_per_year: 0 },
+  concierge:  { label: 'Concierge',  price: 2500, advisor_hrs: 26,  visits_per_year: 4 }, // legacy
+  self_serve: { label: 'Self-Serve', price: 129,  advisor_hrs: 0,   visits_per_year: 0 }, // legacy ≈ enhanced
 };
+
+// Self-managed tiers use the DIY portal (build/edit your own record, no
+// advisor). Legacy self_serve behaves like enhanced.
+const SELF_MANAGED_TIERS = ['basic', 'enhanced', 'self_serve'];
+const isSelfManaged = (tier) => SELF_MANAGED_TIERS.includes(tier);
+
+// Basic (free) is the only limited tier: rule-based recommendations only,
+// headline-only capital forecast, and capped document storage. Every tier
+// above it gets the full service.
+const isBasic = (tier) => tier === 'basic';
+const BASIC_DOC_CAP = 15;
 
 // Every client-facing intake output carries this (business rule #10).
 const SCOPE_DISCLAIMER =
   'This assessment is an advisory walkthrough, not a licensed home inspection.';
 
-module.exports = { SYSTEM_CATEGORIES, TRADES, TIERS, SCOPE_DISCLAIMER };
+module.exports = {
+  SYSTEM_CATEGORIES, TRADES, TIERS, SELF_MANAGED_TIERS, isSelfManaged, isBasic,
+  BASIC_DOC_CAP, SCOPE_DISCLAIMER,
+};

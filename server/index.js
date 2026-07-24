@@ -132,10 +132,10 @@ async function handleSignup(req, res) {
   const id = db.prepare(
     `INSERT INTO clients (first_name, last_name, email, preferred_contact, market_id, tier,
        subscription_start, subscription_renewal, annual_rate, referral_source, status, password_hash)
-     VALUES (?,?,?,'email',?,'self_serve',?,?,?,'self_serve_signup','active',?)`
+     VALUES (?,?,?,'email',?,'basic',?,?,?,'basic_signup','active',?)`
   ).run(firstName, lastName, email, marketId, start, renewal,
-    TIERS.self_serve.price, auth.hashPassword(password)).lastInsertRowid;
-  audit('client', id, 'signup', 'clients', id, 'self-serve signup (payments bypassed)');
+    TIERS.basic.price, auth.hashPassword(password)).lastInsertRowid;
+  audit('client', id, 'signup', 'clients', id, 'basic (free) signup');
 
   clearLoginAttempts(ip);
   const token = auth.createSession('client', id);

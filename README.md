@@ -42,12 +42,17 @@ checklist for replacing the demo passwords below before exposing it.
 | Client (Concierge) | `sarah@client.demo` | `welcome123` |
 | Client (Managed) | `james@client.demo` | `welcome123` |
 | Client (Guided) | `mia@client.demo` | `welcome123` |
-| Client (Self-Serve) | `taylor@client.demo` | `welcome123` |
+| Client (Enhanced — paid hero) | `taylor@client.demo` | `welcome123` |
+| Client (Basic — free) | `sam@client.demo` | `welcome123` |
 
-Self-Serve accounts can also be created from the login screen ("Create a
-Self-Serve account") — signup is open, payments are bypassed, and the new
-client builds their own Home Record through guided onboarding (US-S1/S2).
-Self-Serve clients get a personal contractor book, service logging with
+Free **Basic** accounts can be created from the login screen ("Create an
+account") — signup is open, payments are bypassed, and the new client builds
+their own Home Record through guided onboarding (US-S1/S2). Basic is the free,
+self-managed tier (rule-based recommendations, a headline-only capital forecast,
+capped document storage); **Enhanced** (~$120/yr, self-upgrade in the portal)
+unlocks AI-tailored recommendations, the full itemized 5-year forecast, and
+unlimited storage. See `docs/BUSINESS.md` for the full tier model.
+Self-managed clients get a personal contractor book, service logging with
 categorized document attachments (quote/invoice/receipt/contract) and inline
 creation of a missing contractor, system, or piece of equipment without
 leaving the form, a permit history they can record themselves (with the
@@ -113,7 +118,8 @@ Generated items are deduplicated per rule + system.
 ### Client portal (§5.2)
 Overview with hero stats, 12-month color-coded maintenance calendar, systems
 with age bars, full maintenance history (US-C2), five-year capital forecast
-(Managed/Concierge only — US-C3), the home's contractor roster (US-C4),
+(full itemized plan on Enhanced and up; a headline number on Basic — US-C3),
+the home's contractor roster (US-C4),
 document browse/upload (US-C5), request submission, and full Home Record
 export (US-C6/C7) as a print-optimized document (print → save as PDF).
 
@@ -136,8 +142,9 @@ complaint flags, referral volume by trade).
 6. **Fee transparency** — the referral relationship is disclosed in the portal
    and on exports (while fee *accounting* stays founder-only, §2.2)
 7. **Rule immortality** — DELETE on a rule deactivates it; nothing is erased
-8. **Tier-scoped features** — capital forecast API returns nothing for Guided;
-   visit cadence tracked against tier promises
+8. **Tier-scoped features** — Basic gets a headline forecast + rule-based
+   recommendations; the full itemized forecast and AI recommendations are
+   Enhanced+; visit cadence tracked against tier promises
 9. **Internal vs client-visible** — enforced at the API with column
    whitelists; advisor notes, household notes, vetting notes, and fee data
    never serialize into a client session

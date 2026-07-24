@@ -275,9 +275,10 @@ function recordFeedback(db, payload, tasks, source, clientId, propertyId) {
   return recorded;
 }
 
-async function suggest(payload, property, related = {}) {
+async function suggest(payload, property, related = {}, opts = {}) {
   const fleet = fleetContext(open(), payload);
-  if (process.env.ANTHROPIC_API_KEY) {
+  const allowAI = opts.allowAI !== false; // Basic tier passes false → rules only
+  if (allowAI && process.env.ANTHROPIC_API_KEY) {
     try {
       return { ...(await suggestViaClaude(payload, property, related, fleet)), fleet: fleetSummary(fleet) };
     } catch (err) {

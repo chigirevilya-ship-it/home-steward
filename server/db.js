@@ -62,7 +62,72 @@ function migrateDocumentTypes(handle) {
   }
 }
 
+// The tier list is a CHECK constraint on clients + subscriptions. Expanding it
+// to add the Basic/Enhanced tiers needs the same rebuild dance as documents.
+// clients has FK dependents, so foreign_keys stays OFF during the swap (they
+// resolve by table name afterward) — identical to the documents rebuild.
+function migrateTierCheck(handle) {
+  const ddl = handle.prepare(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'clients'`).get();
+  if (!ddl || ddl.sql.includes("'basic'")) return; // already current
+  const CHECK = "CHECK (tier IN ('basic','enhanced','guided','managed','concierge','self_serve'))";
+  handle.exec('PRAGMA foreign_keys = OFF');
+  handle.exec('BEGIN');
+  try {
+    const clientCols = 'id, first_name, last_name, email, phone, preferred_contact, market_id, advisor_id, tier, subscription_start, subscription_renewal, annual_rate, charter_member, intake_fee_paid, intake_fee_date, referral_source, status, notes, password_hash';
+    handle.exec(`CREATE TABLE clients_new (
+      id                   INTEGER PRIMARY KEY,
+      first_name           TEXT NOT NULL,
+      last_name            TEXT NOT NULL,
+      email                TEXT UNIQUE,
+      phone                TEXT,
+      preferred_contact    TEXT CHECK (preferred_contact IN ('email','text','call') OR preferred_contact IS NULL),
+      market_id            INTEGER NOT NULL REFERENCES markets(id),
+      advisor_id           INTEGER REFERENCES users(id),
+      tier                 TEXT NOT NULL ${CHECK},
+      subscription_start   TEXT,
+      subscription_renewal TEXT,
+      annual_rate          REAL,
+      charter_member       INTEGER NOT NULL DEFAULT 0,
+      intake_fee_paid      INTEGER NOT NULL DEFAULT 0,
+      intake_fee_date      TEXT,
+      referral_source      TEXT,
+      status               TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','cancelled','prospect')),
+      notes                TEXT,
+      password_hash        TEXT
+    )`);
+    handle.exec(`INSERT INTO clients_new (${clientCols}) SELECT ${clientCols} FROM clients`);
+    handle.exec('DROP TABLE clients');
+    handle.exec('ALTER TABLE clients_new RENAME TO clients');
+
+    const subCols = 'id, client_id, period_start, period_end, tier, annual_amount, discount_applied, payment_date, payment_method, status';
+    handle.exec(`CREATE TABLE subscriptions_new (
+      id               INTEGER PRIMARY KEY,
+      client_id        INTEGER NOT NULL REFERENCES clients(id),
+      period_start     TEXT NOT NULL,
+      period_end       TEXT NOT NULL,
+      tier             TEXT NOT NULL ${CHECK},
+      annual_amount    REAL,
+      discount_applied TEXT,
+      payment_date     TEXT,
+      payment_method   TEXT,
+      status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('paid','pending','overdue','refunded','cancelled'))
+    )`);
+    handle.exec(`INSERT INTO subscriptions_new (${subCols}) SELECT ${subCols} FROM subscriptions`);
+    handle.exec('DROP TABLE subscriptions');
+    handle.exec('ALTER TABLE subscriptions_new RENAME TO subscriptions');
+    handle.exec('COMMIT');
+    console.log('[migrate] rebuilt clients + subscriptions with Basic/Enhanced tiers');
+  } catch (e) {
+    handle.exec('ROLLBACK');
+    throw e;
+  } finally {
+    handle.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
 function migrate(handle) {
+  migrateTierCheck(handle);
   ensureColumn(handle, 'systems', 'active', 'active INTEGER NOT NULL DEFAULT 1');
   ensureColumn(handle, 'documents', 'equipment_id', 'equipment_id INTEGER REFERENCES equipment(id)');
   ensureColumn(handle, 'maintenance_log', 'equipment_id', 'equipment_id INTEGER REFERENCES equipment(id)');

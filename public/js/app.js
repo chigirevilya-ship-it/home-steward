@@ -25,14 +25,14 @@ function renderLogin() {
         <input class="control" name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn btn-primary" style="width:100%;padding:10px" type="submit">Sign in</button>
       <div style="text-align:center;margin-top:14px" class="small">
-        New here? <a href="#" id="show-signup">Create a Self-Serve account</a>
+        New here? <a href="#" id="show-signup">Create a free account</a>
       </div>
       <div class="login-demo">
         <b>Demo logins</b> (password <code>steward123</code> / clients <code>welcome123</code>)<br>
         Founder: <code>founder@steward.demo</code><br>
         Advisor: <code>marcus@steward.demo</code>, <code>elena@steward.demo</code><br>
         Client: <code>sarah@client.demo</code>, <code>james@client.demo</code><br>
-        Self-serve: <code>taylor@client.demo</code>
+        Enhanced (paid): <code>taylor@client.demo</code> · Basic (free): <code>sam@client.demo</code>
       </div>
     </form>
   </div>`;
@@ -62,7 +62,7 @@ async function renderSignup() {
     <form class="login-card" id="signup-form">
       <div class="login-brand">
         <div class="mark">Steward</div>
-        <div class="tag">Build your own Home Record — Self-Serve.</div>
+        <div class="tag">Start free — build your own Home Record.</div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">
         <label class="field"><span class="field-label">First name</span>
@@ -83,9 +83,9 @@ async function renderSignup() {
         Already a member? <a href="#" id="show-login">Sign in</a>
       </div>
       <div class="login-demo">
-        Self-Serve is the software-only membership: you build and maintain your own
-        Home Record, and the maintenance engine generates your schedule. No advisor,
-        no contractor network — with a one-tap upgrade path when you want one.
+        Basic is the free plan: you build and maintain your own Home Record, and the
+        maintenance engine generates your schedule. Upgrade to <b>Enhanced</b> any time
+        for AI-tailored recommendations and the full capital forecast.
         <b>Payments are disabled in this deployment.</b>
       </div>
     </form>

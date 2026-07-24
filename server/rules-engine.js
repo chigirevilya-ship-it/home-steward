@@ -20,6 +20,27 @@ function addUnits(dateStr, value, unit) {
   return new Date(d.getTime() + days * DAY).toISOString().slice(0, 10);
 }
 
+// Container systems (self-managed tiers) carry no dates of their own — the
+// concrete data lives on their equipment. Derive the system's scheduling basis
+// (install date, lifespan, condition) from its equipment when the system lacks
+// its own. Advisor-tier systems keep their explicit values, so this is a no-op
+// for them. Mutates and returns the system for convenience.
+function deriveSystemDates(system, equipList) {
+  const mine = (equipList || []).filter((e) => e.system_id === system.id && e.active !== 0);
+  if (!system.install_date && system.age_at_intake == null) {
+    const dated = mine.filter((e) => e.install_date).sort((a, b) => a.install_date.localeCompare(b.install_date));
+    if (dated.length) {
+      system.install_date = dated[0].install_date;
+      if (system.expected_lifespan == null) system.expected_lifespan = dated[0].expected_lifespan ?? null;
+    }
+  }
+  if (system.condition_rating == null) {
+    const conds = mine.map((e) => e.condition_rating).filter((c) => c != null);
+    if (conds.length) system.condition_rating = Math.min(...conds); // worst component leads
+  }
+  return system;
+}
+
 // Age of a system in years, from install_date or age_at_intake + intake_date.
 function systemAgeYears(system, property, asOf = today()) {
   const now = new Date(asOf + 'T00:00:00Z').getTime();
@@ -141,6 +162,8 @@ function generateForProperty(propertyId, actor = { kind: 'system', id: null }) {
   const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(propertyId);
   if (!property) return { created: 0 };
   const systems = db.prepare('SELECT * FROM systems WHERE property_id = ? AND active = 1').all(propertyId);
+  const equip = db.prepare('SELECT * FROM equipment WHERE property_id = ? AND active = 1').all(propertyId);
+  for (const s of systems) deriveSystemDates(s, equip);
   let created = 0;
 
   const insert = db.prepare(
@@ -222,6 +245,9 @@ function propagationPreview(rule) {
   const affected = new Set();
   for (const row of rows) {
     const property = { id: row.pid, year_built: row.year_built, intake_date: row.intake_date, market_id: row.market_id };
+    if (!row.install_date && row.age_at_intake == null) {
+      deriveSystemDates(row, db.prepare('SELECT * FROM equipment WHERE property_id = ? AND active = 1').all(row.pid));
+    }
     const age = systemAgeYears(row, property);
     if (rule.applies_age_min_yrs != null && (age == null || age < rule.applies_age_min_yrs)) continue;
     if (rule.applies_age_max_yrs != null && (age == null || age > rule.applies_age_max_yrs)) continue;
@@ -243,5 +269,5 @@ function warrantyStatus(expiry, asOf = today()) {
 
 module.exports = {
   generateForProperty, recomputeAll, propagationPreview,
-  remainingLife, systemAgeYears, dueWindowFor, warrantyStatus,
+  remainingLife, systemAgeYears, dueWindowFor, warrantyStatus, deriveSystemDates,
 };

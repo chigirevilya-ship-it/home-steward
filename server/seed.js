@@ -491,22 +491,23 @@ function seed({ reset = false } = {}) {
     1998, 1650, 2, 3, 1.5, 'townhouse', 'wood_frame', 'poured_concrete', rel(-1500),
     null, rel(-58), null, 40,
     null).lastInsertRowid;
-  mkSys.run('Gas furnace', pTaylor, 'HVAC - Heating',
-    'Forced hot air, basement closet.', yearsAgo(10), null, 20, 4,
-    null, null, null, rel(-430), 0, null);
-  mkSys.run('Gas water heater', pTaylor, 'Water Heater - Gas',
-    '40-gal tank, basement.', yearsAgo(7), null, 12, 4,
-    null, null, null, null, 0, null);
-  mkSys.run('Asphalt shingle roof', pTaylor, 'Roof - Asphalt',
-    'Installed by previous owner, per disclosure.', yearsAgo(16), null, 30, 3,
-    null, null, null, null, 0, null);
-  mkSys.run('Smoke / CO detectors', pTaylor, 'Safety Systems',
-    'Battery units, replaced last year.', yearsAgo(1), null, 10, 5,
-    null, null, null, null, 0, null);
-  // A composite system: one bucket, several components. One head is failing —
+  // Systems are containers (no dates); the concrete data lives on the units.
+  const sysFurnace = mkSys.run('Heating', pTaylor, 'HVAC - Heating',
+    'Forced hot air, basement closet.', null, null, null, null, null, null, null, null, 0, null).lastInsertRowid;
+  mkEquip.run(pTaylor, sysFurnace, 'Gas furnace', null, 'Carrier', '58STA080', null, yearsAgo(10), 20, rel(-430), 4, null);
+  const sysWH = mkSys.run('Water heater', pTaylor, 'Water Heater - Gas',
+    '40-gal tank, basement.', null, null, null, null, null, null, null, null, 0, null).lastInsertRowid;
+  mkEquip.run(pTaylor, sysWH, '40-gal gas tank', null, 'Rheem', 'XG40T06', null, yearsAgo(7), 12, null, 4, null);
+  const sysRoof = mkSys.run('Roof', pTaylor, 'Roof - Asphalt',
+    'Installed by previous owner, per disclosure.', null, null, null, null, null, null, null, null, 0, null).lastInsertRowid;
+  mkEquip.run(pTaylor, sysRoof, 'Asphalt shingles', null, null, null, null, yearsAgo(16), 30, null, 3, null);
+  const sysSmoke = mkSys.run('Safety', pTaylor, 'Safety Systems',
+    'Battery units, replaced last year.', null, null, null, null, null, null, null, null, 0, null).lastInsertRowid;
+  mkEquip.run(pTaylor, sysSmoke, 'Smoke / CO detectors', null, 'First Alert', null, null, yearsAgo(1), 10, null, 5, null);
+  // A composite system: one container, several units. One head is failing —
   // the card rolls that up without dragging the whole system's rating down.
   const sysMini = mkSys.run('Mini-split (whole-home)', pTaylor, 'Mini-Split / Heat Pump',
-    'Three-zone ductless system — one outdoor condenser feeding three indoor heads.', yearsAgo(6), null, 15, 4,
+    'Three-zone ductless system — one outdoor condenser feeding three indoor heads.', null, null, null, null,
     null, null, null, null, 0, null).lastInsertRowid;
   mkEquip.run(pTaylor, sysMini, 'Outdoor condenser', 'Roof-mounted; feeds all three heads.', 'Mitsubishi', 'MXZ-3C24NA', null,
     yearsAgo(6), 15, null, 4, null);
@@ -534,9 +535,9 @@ function seed({ reset = false } = {}) {
       'Luis suggested checking the tub grout again in a year.').lastInsertRowid;
   // A permit they recorded themselves (no researched_by → client-owned/editable).
   const taylorPermit = ins(`INSERT INTO permits
-    (property_id, permit_number, date_filed, date_finaled, status, permit_type, scope_description, contractor_of_record, final_inspection_passed)
-    VALUES (?,?,?,?,?,?,?,?,?)`)
-    .run(pTaylor, 'SOM-2023-1187', rel(-420), rel(-360), 'finaled', 'plumbing',
+    (property_id, system_id, permit_number, date_filed, date_finaled, status, permit_type, scope_description, contractor_of_record, final_inspection_passed)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(pTaylor, sysWH, 'SOM-2023-1187', rel(-420), rel(-360), 'finaled', 'plumbing',
       'Water heater replacement — permit pulled by the plumber.', 'Bay State Plumbing', 1).lastInsertRowid;
 
   // ── Documents (small real files so download works out of the box) ─────
@@ -580,10 +581,12 @@ function seed({ reset = false } = {}) {
   const pSam = mkProp.run('12 Maple Ct', 'Medford', 'MA', '02155', sam, BOS,
     1972, 1400, 1, 3, 1, 'single_family', 'wood_frame', 'poured_concrete', rel(-900),
     null, rel(-8), null, 20, null).lastInsertRowid;
-  mkSys.run('Gas furnace', pSam, 'HVAC - Heating', 'Basement, original to a 2005 reno.',
-    yearsAgo(18), null, 20, 3, null, null, null, null, 0, null);
-  mkSys.run('Gas water heater', pSam, 'Water Heater - Gas', '50-gal tank.',
-    yearsAgo(9), null, 12, 3, null, null, null, null, 0, null);
+  const samHeat = mkSys.run('Heating', pSam, 'HVAC - Heating', 'Basement, original to a 2005 reno.',
+    null, null, null, null, null, null, null, null, 0, null).lastInsertRowid;
+  mkEquip.run(pSam, samHeat, 'Gas furnace', null, null, null, null, yearsAgo(18), 20, null, 3, null);
+  const samWH = mkSys.run('Water heater', pSam, 'Water Heater - Gas', '50-gal tank.',
+    null, null, null, null, null, null, null, null, 0, null).lastInsertRowid;
+  mkEquip.run(pSam, samWH, '50-gal gas tank', null, null, null, null, yearsAgo(9), 12, null, 3, null);
   mkSub.run(sam, rel(-8), rel(357), 'basic', 0, 'free tier', rel(-8), null, 'paid');
 
   // ── Client request (portal) ────────────────────────────────────────────

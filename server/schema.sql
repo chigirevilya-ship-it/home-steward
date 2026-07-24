@@ -134,7 +134,9 @@ CREATE TABLE IF NOT EXISTS permits (
   gap_flag                INTEGER NOT NULL DEFAULT 0,  -- visible improvement, no matching permit
   gap_notes               TEXT,
   researched_date         TEXT,
-  researched_by           INTEGER REFERENCES users(id)
+  researched_by           INTEGER REFERENCES users(id),
+  system_id               INTEGER REFERENCES systems(id),      -- what the permit is about
+  equipment_id            INTEGER REFERENCES equipment(id)
 );
 
 CREATE TABLE IF NOT EXISTS maintenance_log (

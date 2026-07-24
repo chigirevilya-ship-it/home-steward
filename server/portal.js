@@ -29,7 +29,8 @@ const VISIBLE = {
     'performed_by','client_contractor_id','my_contractor_name','invoice_amount','outcome_notes'],
   my_contractor: ['id','name','company','specialty','phone','email','notes'],
   permit: ['id','permit_number','date_filed','date_finaled','status','permit_type','scope_description',
-    'contractor_of_record','final_inspection_passed','gap_flag','gap_notes'],
+    'contractor_of_record','final_inspection_passed','gap_flag','gap_notes',
+    'system_id','equipment_id','system_name','equipment_name'],
   visit: ['id','visit_date','visit_type','advisor_name','systems_reviewed','findings_summary'],
   contractor: ['id','company_name','primary_contact','email','phone','trades','preferred_pricing'],
   document: ['id','document_name','document_type','mime_type','size_bytes','system_id','system_name',
@@ -63,17 +64,11 @@ function buildPortalRecord(client, property) {
   const pid = property.id;
   const t = today();
 
-  const shapeSystem = (s) => pick({
-    ...s,
-    age_years: rulesEngine.systemAgeYears(s, property) != null
-      ? Math.round(rulesEngine.systemAgeYears(s, property) * 10) / 10 : null,
-    remaining_life: rulesEngine.remainingLife(s, property),
-  }, VISIBLE.system);
-  const allSystemRows = db.prepare('SELECT * FROM systems WHERE property_id = ?').all(pid);
-  const systems = allSystemRows.filter((s) => s.active !== 0).map(shapeSystem)
-    .sort((a, b) => (a.remaining_life ?? 999) - (b.remaining_life ?? 999));
-  const retiredSystems = allSystemRows.filter((s) => s.active === 0).map(shapeSystem);
-
+  // Equipment holds the concrete data; load it first so container systems can
+  // derive their scheduling basis (install date, lifespan, condition) from it.
+  const allEquipRows = db.prepare(
+    `SELECT e.*, s.system_name FROM equipment e LEFT JOIN systems s ON s.id = e.system_id
+     WHERE e.property_id = ? ORDER BY e.name`).all(pid);
   const shapeEquip = (e) => pick({
     ...e,
     age_years: rulesEngine.systemAgeYears(e, property) != null
@@ -81,11 +76,23 @@ function buildPortalRecord(client, property) {
     remaining_life: rulesEngine.remainingLife(e, property),
     warranty_status: rulesEngine.warrantyStatus(e.warranty_expiry),
   }, VISIBLE.equipment);
-  const allEquipRows = db.prepare(
-    `SELECT e.*, s.system_name FROM equipment e LEFT JOIN systems s ON s.id = e.system_id
-     WHERE e.property_id = ? ORDER BY e.name`).all(pid);
   const equipment = allEquipRows.filter((e) => e.active !== 0).map(shapeEquip);
   const retiredEquipment = allEquipRows.filter((e) => e.active === 0).map(shapeEquip);
+
+  const shapeSystem = (s) => {
+    rulesEngine.deriveSystemDates(s, allEquipRows); // container systems inherit from equipment
+    return pick({
+      ...s,
+      age_years: rulesEngine.systemAgeYears(s, property) != null
+        ? Math.round(rulesEngine.systemAgeYears(s, property) * 10) / 10 : null,
+      remaining_life: rulesEngine.remainingLife(s, property),
+      component_count: allEquipRows.filter((e) => e.system_id === s.id && e.active !== 0).length,
+    }, [...VISIBLE.system, 'component_count']);
+  };
+  const allSystemRows = db.prepare('SELECT * FROM systems WHERE property_id = ?').all(pid);
+  const systems = allSystemRows.filter((s) => s.active !== 0).map(shapeSystem)
+    .sort((a, b) => (a.remaining_life ?? 999) - (b.remaining_life ?? 999));
+  const retiredSystems = allSystemRows.filter((s) => s.active === 0).map(shapeSystem);
 
   const schedule = db.prepare(
     `SELECT f.*, s.system_name, e.name AS equipment_name, ct.company_name AS contractor_name
@@ -120,7 +127,10 @@ function buildPortalRecord(client, property) {
      FROM client_contractors cc WHERE cc.client_id = ? AND cc.active = 1 ORDER BY cc.name`).all(client.id)
     .map((c) => ({ ...pick(c, VISIBLE.my_contractor), service_count: c.service_count }));
 
-  const permits = db.prepare('SELECT * FROM permits WHERE property_id = ? ORDER BY date_filed DESC').all(pid)
+  const permits = db.prepare(
+    `SELECT pm.*, s.system_name, e.name AS equipment_name FROM permits pm
+     LEFT JOIN systems s ON s.id = pm.system_id LEFT JOIN equipment e ON e.id = pm.equipment_id
+     WHERE pm.property_id = ? ORDER BY pm.date_filed DESC`).all(pid)
     .map((r) => pick(r, VISIBLE.permit));
 
   const visits = db.prepare(
@@ -320,22 +330,29 @@ route('POST', /^\/api\/portal\/enrich\/apply$/, async (req, res, { session }) =>
      VALUES (${pcols.map(() => '?').join(',')}${pcols.length ? ',' : ''}?,?,?,?,1)`
   ).run(...pcols.map((c) => prop[c]), client.id, client.market_id, today(), 40).lastInsertRowid;
 
+  // Container model: each drafted system becomes a bucket (no dates) holding a
+  // dated unit (equipment). Permits link to the system they're about.
   let sysN = 0;
+  const sysByCat = new Map();
   for (const s of Array.isArray(body.systems) ? body.systems : []) {
     if (!s.system_name || !SYSTEM_CATEGORIES.includes(s.category)) continue;
+    const systemId = db.prepare(
+      'INSERT INTO systems (system_name, property_id, category, description, active) VALUES (?,?,?,?,1)'
+    ).run(s.system_name, propertyId, s.category, s.description ?? null).lastInsertRowid;
+    sysByCat.set(s.category, systemId);
     db.prepare(
-      `INSERT INTO systems (system_name, property_id, category, description, install_date, expected_lifespan, active)
-       VALUES (?,?,?,?,?,?,1)`
-    ).run(s.system_name, propertyId, s.category, s.description ?? null, s.install_date ?? null, s.expected_lifespan ?? null);
+      'INSERT INTO equipment (property_id, system_id, name, install_date, expected_lifespan, active) VALUES (?,?,?,?,?,1)'
+    ).run(propertyId, systemId, s.system_name, s.install_date ?? null, s.expected_lifespan ?? null);
     sysN++;
   }
   let permitN = 0;
   for (const p of Array.isArray(body.permits) ? body.permits : []) {
     if (!p.permit_number && !p.scope_description) continue;
+    const permSystemId = p.matched_category ? (sysByCat.get(p.matched_category) ?? null) : null;
     db.prepare(
-      `INSERT INTO permits (property_id, permit_number, date_filed, date_finaled, status, permit_type, scope_description, contractor_of_record)
-       VALUES (?,?,?,?,?,?,?,?)`
-    ).run(propertyId, p.permit_number ?? null, p.date_filed ?? null, p.date_finaled ?? null,
+      `INSERT INTO permits (property_id, system_id, permit_number, date_filed, date_finaled, status, permit_type, scope_description, contractor_of_record)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    ).run(propertyId, permSystemId, p.permit_number ?? null, p.date_filed ?? null, p.date_finaled ?? null,
       PERMIT_STATUS.includes(p.status) ? p.status : 'unknown',
       PERMIT_TYPES.includes(p.permit_type) ? p.permit_type : 'other',
       p.scope_description ?? null, p.contractor_of_record ?? null);
@@ -472,6 +489,12 @@ function assertOwnEquipment(db, property, equipmentId) {
     throw Object.assign(new Error('That equipment is not on your home'), { status: 400 });
   }
 }
+// A record on a component is also about its parent system — so every record
+// attached to equipment is linked to the equipment's system too, and rolls up.
+function parentSystemId(db, equipmentId) {
+  if (equipmentId == null) return null;
+  return db.prepare('SELECT system_id FROM equipment WHERE id = ?').get(equipmentId)?.system_id ?? null;
+}
 
 route('POST', /^\/api\/portal\/equipment$/, async (req, res, { session }) => {
   const client = getClient(session);
@@ -578,7 +601,7 @@ route('POST', /^\/api\/portal\/service$/, async (req, res, { session }) => {
   const logId = db.prepare(
     `INSERT INTO maintenance_log (property_id, system_id, equipment_id, date, description, invoice_amount, performed_by, client_contractor_id, outcome_notes)
      VALUES (?,?,?,?,?,?,?,?,?)`
-  ).run(property.id, body.system_id ?? forwardItem?.system_id ?? null, body.equipment_id ?? null,
+  ).run(property.id, body.system_id ?? forwardItem?.system_id ?? parentSystemId(db, body.equipment_id) ?? null, body.equipment_id ?? null,
     body.date, body.description, body.invoice_amount ?? null, body.performed_by ?? null,
     body.client_contractor_id ?? null, body.outcome_notes ?? null).lastInsertRowid;
   audit('client', client.id, 'create', 'maintenance_log', logId, body.description.slice(0, 80));
@@ -722,7 +745,7 @@ route('POST', /^\/api\/portal\/tasks$/, async (req, res, { session }) => {
     `INSERT INTO forward_schedule (item_name, property_id, system_id, equipment_id, due_date, due_window,
        priority, status, est_cost_low, est_cost_high, deferral_risk, custom, repeat_value, repeat_unit)
      VALUES (?,?,?,?,?,?,?, 'upcoming', ?,?,?,1,?,?)`
-  ).run(body.item_name, property.id, body.system_id ?? null, body.equipment_id ?? null,
+  ).run(body.item_name, property.id, body.system_id ?? parentSystemId(db, body.equipment_id) ?? null, body.equipment_id ?? null,
     body.due_date, rulesEngine.dueWindowFor(body.due_date), body.priority ?? 'standard',
     body.est_cost_low ?? null, body.est_cost_high ?? null, body.deferral_risk ?? null,
     body.repeat_value ?? null, body.repeat_unit ?? null).lastInsertRowid;
@@ -866,7 +889,7 @@ route('DELETE', /^\/api\/portal\/tasks\/(\d+)$/, async (req, res, { session, par
 // Client-editable fields only. gap_flag / gap_notes / researched_* stay
 // advisor-owned and never accept client input.
 const PERMIT_WRITE = ['permit_number','date_filed','date_finaled','status','permit_type',
-  'scope_description','contractor_of_record','final_inspection_passed'];
+  'scope_description','contractor_of_record','final_inspection_passed','system_id','equipment_id'];
 const PERMIT_STATUS = ['finaled','open','expired','pending','unknown'];
 const PERMIT_TYPES = ['electrical','plumbing','structural','mechanical','general_building','demolition','other'];
 
@@ -878,9 +901,16 @@ function cleanPermitBody(body) {
     if (c === 'status' && v != null && !PERMIT_STATUS.includes(v)) v = 'unknown';
     if (c === 'permit_type' && v != null && !PERMIT_TYPES.includes(v)) v = 'other';
     if (c === 'final_inspection_passed' && v != null) v = v ? 1 : 0;
+    if ((c === 'system_id' || c === 'equipment_id') && v != null && v !== '') v = Number(v) || null;
     out[c] = v === '' ? null : v;
   }
   return out;
+}
+// Ownership + container roll-up for a permit's system/equipment links.
+function linkPermitToHome(db, property, fields) {
+  assertOwnSystem(db, property, fields.system_id ?? null);
+  assertOwnEquipment(db, property, fields.equipment_id ?? null);
+  if (fields.equipment_id && fields.system_id == null) fields.system_id = parentSystemId(db, fields.equipment_id);
 }
 
 route('POST', /^\/api\/portal\/permits$/, async (req, res, { session }) => {
@@ -892,8 +922,9 @@ route('POST', /^\/api\/portal\/permits$/, async (req, res, { session }) => {
   if (!fields.permit_number && !fields.scope_description) {
     return sendError(res, 400, 'Give the permit a number or a scope description');
   }
-  const cols = Object.keys(fields);
   const db = open();
+  linkPermitToHome(db, property, fields);
+  const cols = Object.keys(fields);
   const id = db.prepare(
     `INSERT INTO permits (property_id${cols.length ? ',' + cols.join(',') : ''})
      VALUES (?${cols.map(() => ',?').join('')})`
@@ -911,6 +942,7 @@ route('PATCH', /^\/api\/portal\/permits\/(\d+)$/, async (req, res, { session, pa
   const existing = db.prepare('SELECT * FROM permits WHERE id = ?').get(id);
   if (!existing || existing.property_id !== property.id) return sendError(res, 404, 'Not your permit');
   const fields = cleanPermitBody(await readJson(req));
+  linkPermitToHome(db, property, fields);
   const cols = Object.keys(fields);
   if (!cols.length) return sendError(res, 400, 'Nothing to update');
   db.prepare(`UPDATE permits SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
@@ -961,8 +993,9 @@ route('POST', /^\/api\/portal\/documents$/, async (req, res, { session, query })
     }
   }
   // Optional relates-to links, each verified against the client's own home.
-  const systemId = Number(query.get('system_id')) || null;
   const equipmentId = Number(query.get('equipment_id')) || null;
+  // A doc on a component is also on that component's system (container roll-up).
+  const systemId = Number(query.get('system_id')) || parentSystemId(db, equipmentId) || null;
   const logId = Number(query.get('log_id')) || null;
   const permitId = Number(query.get('permit_id')) || null;
   assertOwnSystem(db, property, systemId);

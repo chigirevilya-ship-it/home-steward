@@ -137,7 +137,16 @@ function migrate(handle) {
   ensureColumn(handle, 'forward_schedule', 'custom', 'custom INTEGER NOT NULL DEFAULT 0');
   ensureColumn(handle, 'forward_schedule', 'repeat_value', 'repeat_value REAL');
   ensureColumn(handle, 'forward_schedule', 'repeat_unit', 'repeat_unit TEXT');
+  ensureColumn(handle, 'permits', 'system_id', 'system_id INTEGER REFERENCES systems(id)');
+  ensureColumn(handle, 'permits', 'equipment_id', 'equipment_id INTEGER REFERENCES equipment(id)');
   migrateDocumentTypes(handle);
+  // Roll component records up to their parent system: any record on a piece of
+  // equipment is also about that equipment's system (container model).
+  for (const tbl of ['maintenance_log', 'forward_schedule', 'documents', 'permits']) {
+    handle.exec(`UPDATE ${tbl} SET system_id = (SELECT e.system_id FROM equipment e WHERE e.id = ${tbl}.equipment_id)
+      WHERE equipment_id IS NOT NULL AND system_id IS NULL
+        AND (SELECT e.system_id FROM equipment e WHERE e.id = ${tbl}.equipment_id) IS NOT NULL`);
+  }
 }
 
 function open() {

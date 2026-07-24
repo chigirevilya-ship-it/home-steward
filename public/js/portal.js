@@ -147,56 +147,58 @@ function renderEnrichDraft(view, r, draft) {
   });
 }
 
-// The 60-second capture, homeowner edition (no internal fields).
+// A system is a CONTAINER — a category bucket. The concrete data (install
+// date, model, condition, warranty) lives on the equipment/units inside it,
+// and the system rolls those up. So this form is just name + category + notes.
 function selfSystemModal(r, existing, done) {
   const m = modal(existing ? `Edit — ${existing.system_name}` : 'Add a system', `
+    <p class="sub" style="margin-bottom:10px">A system is a bucket for one part of your home. Its units, services,
+    documents, and permits live inside it${existing ? '' : " — you'll add the first unit next"}.</p>
     <div class="form-grid">
       ${field('category', 'What kind of system?', select(r.categories.map((c) =>
         ({ value: c, label: c, selected: existing?.category === c }))))}
-      ${field('system_name', 'Name it', input(`value="${esc(existing?.system_name || '')}" placeholder="Gas furnace, kitchen fridge…"`))}
-      <div class="field span2"><span class="field-label">Condition (1 = failing, 5 = like new)</span>
-        ${starInput('condition_rating', existing?.condition_rating || 0)}</div>
-      ${field('install_date', 'Installed (if you know)', input(`type="date" value="${existing?.install_date || ''}"`))}
-      ${field('age_at_intake', 'Or roughly how old (years)', input(`type="number" step="0.5" value="${existing?.age_at_intake ?? ''}" data-number`))}
-      ${field('expected_lifespan', 'Expected lifespan (years)', input(`type="number" step="0.5" value="${existing?.expected_lifespan ?? ''}" data-number`))}
-      ${field('last_service_date', 'Last serviced (if you know)', input(`type="date" value="${existing?.last_service_date || ''}"`))}
-      ${field('model_number', 'Model # (from the data plate)', input(`value="${esc(existing?.model_number || '')}"`))}
-      ${field('warranty_expiry', 'Warranty until', input(`type="date" value="${existing?.warranty_expiry || ''}"`))}
-      <div class="span2">${field('description', 'Description', textarea(`rows="2"`))}</div>
+      ${field('system_name', 'Name it', input(`value="${esc(existing?.system_name || '')}" placeholder="Heating, Water heater, Roof…"`))}
+      <div class="span2">${field('description', 'Description (optional)', textarea(`rows="2"`))}</div>
     </div>
     <div class="suggest-panel" id="sg-panel" style="display:none"></div>
     <div class="form-actions">
-      ${existing ? lifecycleButtonsHtml() : ''}
+      ${existing ? '<button type="button" class="btn btn-danger" id="lc-retire">Retire</button>' : ''}
       <button type="button" class="btn" id="sg-btn">✨ Suggest schedule & description</button>
       <button class="btn btn-primary" id="ss-save">${existing ? 'Save changes' : 'Add system'}</button>
     </div>`,
     { wide: true });
-  bindStarInputs(m.body);
   if (existing) $('[name=description]', m.body).value = existing.description || '';
 
   let savedId = existing?.id ?? null;
   async function saveItem() {
     const body = formValues(m.body);
-    body.condition_rating = readStars(m.body, 'condition_rating');
+    if (!body.category) throw new Error('Pick a category');
     if (!body.system_name) throw new Error('Give the system a name first');
-    if (savedId) {
-      await api(`/api/portal/systems/${savedId}`, { method: 'PATCH', body });
-    } else {
-      const res = await api('/api/portal/systems', { method: 'POST', body });
-      savedId = res.id;
-    }
+    if (savedId) await api(`/api/portal/systems/${savedId}`, { method: 'PATCH', body });
+    else { const res = await api('/api/portal/systems', { method: 'POST', body }); savedId = res.id; }
     return savedId;
   }
 
   $('#ss-save', m.body).addEventListener('click', async () => {
     try {
+      const isNew = !savedId;
       const id = await saveItem();
       invalidate();
-      toast('Saved');
-      m.close(); done(id);
+      m.close();
+      if (isNew) {
+        toast('System added — now add the unit inside it');
+        selfEquipmentModal(await record(), null, () => done(id), { system_id: id });
+      } else { toast('Saved'); done(id); }
     } catch (err) { toast(err.message, 'err'); }
   });
-  bindLifecycle(m, r, 'system', existing, done);
+  // Containers retire with their components; replace is a per-unit action.
+  $('#lc-retire', m.body)?.addEventListener('click', async () => {
+    if (!confirm('Retire this system and its units? Their history stays in your record.')) return;
+    try {
+      await api(`/api/portal/systems/${existing.id}/retire`, { method: 'POST', body: {} });
+      invalidate(); toast('Retired — history kept'); m.close(); done();
+    } catch (err) { toast(err.message, 'err'); }
+  });
   bindSuggest(m, r, 'system', existing, saveItem, done);
 }
 
@@ -259,15 +261,17 @@ function warrantyBadge(status, expiry) {
   return '';
 }
 
-// Equipment modal — homeowner edition (no internal notes).
-function selfEquipmentModal(r, existing, done) {
-  const m = modal(existing ? `Edit — ${existing.name}` : 'Add equipment', `
-    <p class="sub" style="margin-bottom:12px">Track anything with its own model and warranty — parts of a system
-    (a condenser inside your AC) or freestanding (a generator, a mower).</p>
+// Equipment / unit modal — this is where the concrete data lives (make, model,
+// install date, warranty, condition). A unit belongs to a system (container).
+function selfEquipmentModal(r, existing, done, preset = {}) {
+  const presetSystem = existing?.system_id ?? preset.system_id ?? null;
+  const m = modal(existing ? `Edit — ${existing.name}` : 'Add a unit', `
+    <p class="sub" style="margin-bottom:12px">A unit is the real thing with a model and warranty — the tank in your
+    water heater, a condenser in your AC, or a freestanding item (a generator).</p>
     <div class="form-grid">
-      ${field('name', 'Name', input(`value="${esc(existing?.name || '')}" placeholder="AC condenser, generator…"`))}
-      ${field('system_id', 'Part of system', select([{ value: '', label: '— freestanding —' },
-        ...r.systems.map((s) => ({ value: s.id, label: s.system_name, selected: existing?.system_id === s.id }))], 'data-number'))}
+      ${field('name', 'Name', input(`value="${esc(existing?.name || '')}" placeholder="50-gal tank, AC condenser…"`))}
+      ${field('system_id', 'Part of which system?', select([{ value: '', label: '— freestanding —' },
+        ...r.systems.map((s) => ({ value: s.id, label: s.system_name, selected: presetSystem === s.id }))], 'data-number'))}
       ${field('make', 'Make', input(`value="${esc(existing?.make || '')}"`))}
       ${field('model_number', 'Model #', input(`value="${esc(existing?.model_number || '')}"`))}
       ${field('serial_number', 'Serial #', input(`value="${esc(existing?.serial_number || '')}"`))}
@@ -544,6 +548,10 @@ function permitModal(r, existing, done) {
       ${field('status', 'Status', select(['unknown', 'pending', 'open', 'finaled', 'expired']
         .map((s) => ({ value: s, label: s, selected: (existing?.status || 'unknown') === s }))))}
       ${field('contractor_of_record', 'Contractor of record', input(`value="${esc(existing?.contractor_of_record || '')}"`))}
+      ${field('system_id', 'What system is it for?', select([{ value: '', label: '— none —' },
+        ...r.systems.map((s) => ({ value: s.id, label: s.system_name, selected: existing?.system_id === s.id }))], 'data-number'))}
+      ${field('equipment_id', 'Which unit? (optional)', select([{ value: '', label: '— none —' },
+        ...r.equipment.map((e) => ({ value: e.id, label: e.name, selected: existing?.equipment_id === e.id }))], 'data-number'))}
       <div class="field span2"><span class="field-label">Final inspection</span>
         <label class="checkbox-row"><input type="checkbox" name="final_inspection_passed" ${existing?.final_inspection_passed ? 'checked' : ''}> passed</label></div>
       <div class="span2">${field('scope_description', 'Scope of work', textarea(`rows="2"`))}</div>
@@ -559,6 +567,16 @@ function permitModal(r, existing, done) {
       <button class="btn btn-primary" id="permit-save">${existing ? 'Save changes' : 'Add permit'}</button>
     </div>`, { wide: true });
   $('[name=scope_description]', m.body).value = existing?.scope_description || '';
+  inlineCreate($('[name=system_id]', m.body), {
+    placeholder: '— none —', addLabel: '+ Add a system…',
+    itemsFn: (fresh) => fresh.systems.map((s) => ({ value: s.id, label: s.system_name })),
+    openCreate: (cb) => selfSystemModal(r, null, cb),
+  });
+  inlineCreate($('[name=equipment_id]', m.body), {
+    placeholder: '— none —', addLabel: '+ Add a unit…',
+    itemsFn: (fresh) => fresh.equipment.map((e) => ({ value: e.id, label: e.name })),
+    openCreate: (cb) => selfEquipmentModal(r, null, cb),
+  });
 
   $('#permit-save', m.body).addEventListener('click', async () => {
     const body = formValues(m.body);
@@ -643,30 +661,34 @@ function componentHealth(components) {
 
 function detailModal(r, kind, id, done) {
   const refresh = done || (() => {});
-  let title = '', header = '', tasks = [], history = [], docs = [];
+  let title = '', header = '', tasks = [], history = [], docs = [], permits = [];
+  const unit = (rec) => rec.equipment_name ? ` <span class="small muted">· ${esc(rec.equipment_name)}</span>` : '';
   if (kind === 'system') {
     const s = allSystems(r).find((x) => x.id === id);
     if (!s) return;
     title = s.system_name;
     const equip = allEquipment(r).filter((e) => e.system_id === id);
-    header = `<span class="chip">${esc(s.category)}</span> ${stars(s.condition_rating)}${retiredTag(s)}
+    header = `<span class="chip">${esc(s.category)}</span> ${s.condition_rating != null ? stars(s.condition_rating) : ''}${retiredTag(s)}
       ${s.remaining_life != null ? `<span class="small muted"> · ~${s.remaining_life} yrs left</span>` : ''}
       ${s.description ? `<div class="small sub" style="margin-top:6px">${esc(s.description)}</div>` : ''}
-      ${equip.length ? `<div style="margin-top:8px">${equip.map((e) => `<span class="chip link-chip" data-detail="equipment:${e.id}">⚙ ${esc(e.name)}${e.active === 0 ? ' ·retired' : ''}</span>`).join('')}</div>` : ''}`;
+      <div style="margin-top:8px"><span class="field-label">Units</span><br>${equip.length ? equip.map((e) =>
+        `<span class="chip link-chip" data-detail="equipment:${e.id}">⚙ ${esc(e.name)}${e.active === 0 ? ' ·retired' : ''}</span>`).join('') : '<span class="small muted">none yet</span>'}</div>`;
     tasks = r.schedule.filter((i) => i.system_id === id);
     history = r.log.filter((l) => l.system_id === id);
     docs = r.documents.filter((d) => d.system_id === id);
+    permits = (r.permits || []).filter((p) => p.system_id === id);
   } else if (kind === 'equipment') {
     const e = allEquipment(r).find((x) => x.id === id);
     if (!e) return;
     title = e.name;
     header = `${e.system_name ? `<span class="chip link-chip" data-detail="system:${e.system_id}">${esc(e.system_name)}</span>` : '<span class="chip">freestanding</span>'}${retiredTag(e)}
       ${warrantyBadge(e.warranty_status, e.warranty_expiry)}
-      <div class="small sub" style="margin-top:6px">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
+      <div class="small sub" style="margin-top:6px">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}${e.install_date ? `${e.make || e.model_number ? ' · ' : ''}installed ${fmtDate(e.install_date)}` : ''}
       ${e.warranty_expiry && e.warranty_status === 'active' ? ` · warranty to ${fmtDate(e.warranty_expiry)}` : ''}</div>`;
     tasks = r.schedule.filter((i) => i.equipment_id === id);
     history = r.log.filter((l) => l.equipment_id === id);
     docs = r.documents.filter((d) => d.equipment_id === id);
+    permits = (r.permits || []).filter((p) => p.equipment_id === id);
   } else if (kind === 'contractor') {
     const c = r.my_contractors.find((x) => x.id === id);
     if (!c) return;
@@ -682,13 +704,13 @@ function detailModal(r, kind, id, done) {
     <div>${header}</div>
     ${tasks.length ? `<hr class="divider"><h3>Open tasks</h3>
       ${tasks.map((i) => `<div class="item-line small">${priorityBadge(i.priority, i.overdue)}
-        <b>${esc(i.item_name)}</b><span class="right muted">${dueText(i.due_date)}</span></div>`).join('')}` : ''}
+        <b>${esc(i.item_name)}</b>${unit(i)}<span class="right muted">${dueText(i.due_date)}</span></div>`).join('')}` : ''}
     <hr class="divider"><h3>Service history (${history.length})</h3>
     ${history.map((l) => {
       const attached = r.documents.filter((d) => d.maintenance_log_id === l.id);
       return `<div class="item-line small" style="align-items:flex-start">
         <span style="white-space:nowrap" class="muted">${fmtDate(l.date)}</span>
-        <div>${esc(l.description)}
+        <div>${esc(l.description)}${unit(l)}
           ${attached.map((d) => ` <a href="/api/documents/${d.id}/file" target="_blank">📎${esc(d.document_name)}</a>`).join('')}
           <br><span class="muted">${esc(l.my_contractor_name || l.contractor_name || l.performed_by || '')}</span></div>
         <span class="right muted">${money(l.invoice_amount)}</span>
@@ -696,8 +718,12 @@ function detailModal(r, kind, id, done) {
     }).join('') || empty('No services recorded yet.')}
     ${kind !== 'contractor' ? `<hr class="divider"><h3>Documents (${docs.length})</h3>
       ${docs.map((d) => `<div class="item-line small"><span class="chip">${label(d.document_type)}</span>
-        <a href="/api/documents/${d.id}/file" target="_blank">${esc(d.document_name)}</a>
+        <a href="/api/documents/${d.id}/file" target="_blank">${esc(d.document_name)}</a>${unit(d)}
         <span class="right muted">${fmtDate(d.upload_date)}</span></div>`).join('') || empty('No documents linked.')}` : ''}
+    ${kind !== 'contractor' ? `<hr class="divider"><h3>Permits (${permits.length})</h3>
+      ${permits.map((pm) => `<div class="item-line small"><span class="chip">${label(pm.permit_type)}</span>
+        <span>${esc(pm.permit_number || '—')} <span class="muted">${esc((pm.scope_description || '').slice(0, 60))}</span></span>${unit(pm)}
+        <span class="right muted">${statusBadge(pm.status)}</span></div>`).join('') || empty('No permits linked.')}` : ''}
   `, { wide: true });
   bindDetailLinks(m.body, r, refresh);
 }
@@ -995,40 +1021,39 @@ export async function renderSystems(view) {
     : `${r.systems.length} systems on record, sorted by remaining life`)}
   ${r.self_serve ? `<div style="margin-bottom:16px">
     <button class="btn btn-primary" id="ss-add">+ Add a system</button>
-    <button class="btn" id="pe-add">+ Add equipment</button>
+    <button class="btn" id="pe-add">+ Add a unit</button>
   </div>` : ''}
   <div class="grid g2">
     ${r.systems.map((s) => {
       const equip = r.equipment.filter((e) => e.system_id === s.id);
       const health = componentHealth(equip);
+      const svcN = r.log.filter((l) => l.system_id === s.id).length;
+      const docN = r.documents.filter((d) => d.system_id === s.id).length;
+      const pmN = (r.permits || []).filter((p) => p.system_id === s.id).length;
       return `
     <div class="card card-pad">
       <div style="display:flex;justify-content:space-between;gap:8px">
         <div><h3>${esc(s.system_name)}</h3><span class="chip">${esc(s.category)}</span></div>
-        <div style="text-align:right;white-space:nowrap">${stars(s.condition_rating)}<br>
+        <div style="text-align:right;white-space:nowrap">${s.condition_rating != null ? stars(s.condition_rating) : ''}<br>
           <span class="small muted">${s.remaining_life == null ? '' : s.remaining_life <= 0
             ? '<b style="color:var(--critical-text)">at end of expected life</b>' : `~${s.remaining_life} yrs of life left`}</span></div>
       </div>
-      ${health.flagged.length ? `<div style="margin-top:6px"><span class="badge b-serious">▲ ${health.flagged.length} of ${health.count} component${health.count > 1 ? 's' : ''} need${health.flagged.length > 1 ? '' : 's'} attention</span></div>` : ''}
+      ${health.flagged.length ? `<div style="margin-top:6px"><span class="badge b-serious">▲ ${health.flagged.length} of ${health.count} unit${health.count > 1 ? 's' : ''} need${health.flagged.length > 1 ? '' : 's'} attention</span></div>` : ''}
       ${s.description ? `<div class="small sub" style="margin-top:6px">${esc(s.description)}</div>` : ''}
-      ${ageBar(s)}
-      <dl class="kv small" style="margin-top:10px">
-        ${s.install_date ? `<dt>Installed</dt><dd>${fmtDate(s.install_date)}</dd>` : ''}
-        ${s.last_service_date ? `<dt>Last serviced</dt><dd>${fmtDate(s.last_service_date)}</dd>` : ''}
-        ${s.warranty_expiry ? `<dt>Warranty until</dt><dd>${fmtDate(s.warranty_expiry)}</dd>` : ''}
-        ${s.model_number ? `<dt>Model</dt><dd>${esc(s.model_number)}</dd>` : ''}
-      </dl>
-      ${equip.length ? `<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--hairline-2)">
-        <div class="field-label" style="margin-bottom:4px">Components (${health.count})${health.flagged.length ? '' : ' · all healthy'}</div>
+      ${s.install_date ? ageBar(s) : ''}
+      <div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--hairline-2)">
+        <div class="field-label" style="margin-bottom:4px">Units (${health.count})${health.count && !health.flagged.length ? ' · all healthy' : ''}</div>
         ${equip.map((e) => `<div class="item-line small">
           <div><b>${esc(e.name)}</b> ${warrantyBadge(e.warranty_status, e.warranty_expiry)}
             ${e.condition_rating != null && e.condition_rating <= 2 ? '<span class="badge b-serious">▲ failing</span>' : ''}<br>
-            <span class="muted">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
+            <span class="muted">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}${e.install_date ? `${e.make || e.model_number ? ' · ' : ''}installed ${fmtDate(e.install_date)}` : ''}
             ${e.warranty_expiry && e.warranty_status === 'active' ? ` · warranty to ${fmtDate(e.warranty_expiry)}` : ''}</span></div>
           ${r.self_serve ? `<span class="right"><button class="btn btn-sm" data-pe-edit="${e.id}">Edit</button></span>` : ''}
-        </div>`).join('')}
-      </div>` : ''}
-      <div style="margin-top:10px"><button class="btn btn-sm" data-detail="system:${s.id}">History & documents</button>
+        </div>`).join('') || '<div class="small muted">No units yet — add the one inside this system.</div>'}
+        ${r.self_serve ? `<button class="btn btn-sm" data-unit-add="${s.id}" style="margin-top:6px">+ Add a unit</button>` : ''}
+      </div>
+      <div class="small muted" style="margin-top:10px">${svcN} service${svcN === 1 ? '' : 's'} · ${docN} document${docN === 1 ? '' : 's'} · ${pmN} permit${pmN === 1 ? '' : 's'}</div>
+      <div style="margin-top:8px"><button class="btn btn-sm" data-detail="system:${s.id}">Open</button>
       ${r.self_serve ? `<button class="btn btn-sm" data-ss-edit="${s.id}">Edit</button>` : ''}</div>
     </div>`; }).join('') || `<div class="card">${empty('No systems yet — add the first one.')}</div>`}
   </div>
@@ -1036,7 +1061,7 @@ export async function renderSystems(view) {
     const freestanding = r.equipment.filter((e) => !e.system_id);
     return freestanding.length ? `
     <div class="card card-pad section">
-      <h3>Freestanding equipment</h3>
+      <h3>Freestanding units</h3>
       ${freestanding.map((e) => `<div class="item-line small">
         <div><b>${esc(e.name)}</b> ${warrantyBadge(e.warranty_status, e.warranty_expiry)}<br>
           <span class="muted">${[e.make, e.model_number].filter(Boolean).map(esc).join(' · ')}
@@ -1071,6 +1096,10 @@ export async function renderSystems(view) {
     for (const b of $$('[data-pe-edit]', view)) {
       b.addEventListener('click', () =>
         selfEquipmentModal(r, r.equipment.find((e) => e.id === Number(b.dataset.peEdit)), refresh));
+    }
+    for (const b of $$('[data-unit-add]', view)) {
+      b.addEventListener('click', () =>
+        selfEquipmentModal(r, null, refresh, { system_id: Number(b.dataset.unitAdd) }));
     }
   }
   bindDetailLinks(view, r, () => renderSystems(view));

@@ -126,16 +126,18 @@ async function handleSignup(req, res) {
     || db.prepare('SELECT id FROM users WHERE lower(email) = ?').get(email);
   if (taken) return fail(409, 'An account with that email already exists');
 
-  const { TIERS } = require('./vocab');
+  // The new account may pick Basic (free) or Enhanced. Enhanced is free during
+  // the demo (payments are bypassed), so it's recorded at $0.
+  const tier = body.tier === 'enhanced' ? 'enhanced' : 'basic';
   const start = today();
   const renewal = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const id = db.prepare(
     `INSERT INTO clients (first_name, last_name, email, preferred_contact, market_id, tier,
        subscription_start, subscription_renewal, annual_rate, referral_source, status, password_hash)
-     VALUES (?,?,?,'email',?,'basic',?,?,?,'basic_signup','active',?)`
-  ).run(firstName, lastName, email, marketId, start, renewal,
-    TIERS.basic.price, auth.hashPassword(password)).lastInsertRowid;
-  audit('client', id, 'signup', 'clients', id, 'basic (free) signup');
+     VALUES (?,?,?,'email',?,?,?,?,0,?,'active',?)`
+  ).run(firstName, lastName, email, marketId, tier, start, renewal,
+    `${tier}_signup`, auth.hashPassword(password)).lastInsertRowid;
+  audit('client', id, 'signup', 'clients', id, `${tier} signup (payments bypassed)`);
 
   clearLoginAttempts(ip);
   const token = auth.createSession('client', id);

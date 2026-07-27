@@ -167,20 +167,74 @@ async function fetchBostonPermitsLive(address) {
 // ── Bundled fixture (real-shaped Boston records) for offline / demo ─────────
 const { FIXTURES, fixtureKey } = require('./enrich-fixtures');
 
-async function enrichAddress(address, opts = {}) {
-  const parsed = { line1: address.split(',')[0].trim(), raw: address };
-  const geo = opts.skipGeocode ? null : await geocode(address);
+// NJ construction permits (live only — no bundled fallback, by request). The
+// exact per-address source varies by town and is configured with an env var so
+// it can be pointed at Bridgewater's real feed without a code change:
+//
+//   STEWARD_NJ_PERMITS_URL — a URL template with {street} / {zip} placeholders,
+//   returning a Socrata-style JSON array or an ArcGIS FeatureServer response.
+//   e.g. https://data.nj.gov/resource/XXXX.json?$q={street}
+//        https://<host>/arcgis/rest/services/.../query?f=json&where=ADDRESS LIKE '%{street}%'&outFields=*
+//
+// Whatever the source's field names are, the normalizer below maps the common
+// ones (permit number, description, issued date, status, contractor) into the
+// shape the classifier reads, so most NJ feeds work by just setting the URL.
+async function fetchNjPermitsLive(address) {
+  const tmpl = process.env.STEWARD_NJ_PERMITS_URL;
+  if (!tmpl) return null; // no source configured → nothing to look up
+  const street = address.split(',')[0].trim();
+  const zipMatch = address.match(/\b(\d{5})\b/);
+  const url = tmpl.replace(/\{street\}/g, encodeURIComponent(street))
+    .replace(/\{zip\}/g, encodeURIComponent(zipMatch ? zipMatch[1] : ''));
+  try {
+    return await withTimeout(async (signal) => {
+      const res = await fetch(url, { signal, headers: { accept: 'application/json' } });
+      if (!res.ok) throw new Error(`nj source ${res.status}`);
+      const data = await res.json();
+      const rows = Array.isArray(data) ? data : (data.features ? data.features.map((f) => f.attributes || f.properties || f) : data.records || []);
+      const norm = rows.map(normalizeNjRecord).filter((r) => r.description || r.permitnumber);
+      return norm.length ? norm : null;
+    }, 20000);
+  } catch { return null; }
+}
 
-  let records = opts.skipLive ? null : await fetchBostonPermitsLive(address);
-  let source = 'boston_live';
-  if (!records) {
-    records = FIXTURES[fixtureKey(address)]?.permits || null;
-    source = records ? 'fixture' : 'none';
+const pickField = (o, keys) => { for (const k of Object.keys(o)) if (keys.includes(k.toLowerCase())) return o[k]; return null; };
+function normalizeNjRecord(o) {
+  return {
+    permitnumber: pickField(o, ['permitnumber', 'permit_number', 'permit_no', 'permit', 'permitnum', 'record_number']),
+    worktype: pickField(o, ['worktype', 'work_type', 'permit_type', 'permittype', 'type']),
+    permittypedescr: pickField(o, ['permittypedescr', 'permit_type_description', 'type_description', 'subtype']),
+    description: pickField(o, ['description', 'work_description', 'scope', 'scope_of_work', 'permit_description', 'project_description']),
+    comments: pickField(o, ['comments', 'notes', 'remarks']),
+    applicant: pickField(o, ['applicant', 'contractor', 'contractor_name', 'business_name', 'company']),
+    issued_date: pickField(o, ['issued_date', 'issue_date', 'date_issued', 'issueddate', 'status_date', 'application_date']),
+    status: pickField(o, ['status', 'permit_status', 'record_status']),
+    occupancytype: pickField(o, ['occupancytype', 'occupancy', 'use', 'property_use']),
+    address: pickField(o, ['address', 'full_address', 'site_address', 'location']),
+  };
+}
+
+async function enrichAddress(address, opts = {}) {
+  const geo = opts.skipGeocode ? null : await geocode(address);
+  const state = String(geo?.state || (address.match(/,\s*([A-Za-z]{2})\b/) || [])[1] || '').toUpperCase();
+  const isNJ = state === 'NJ' || /\bnew jersey\b/i.test(address);
+
+  let records = null, source = 'none';
+  if (isNJ) {
+    records = opts.skipLive ? null : await fetchNjPermitsLive(address);
+    source = records ? 'nj_live' : 'none';
+  } else {
+    records = opts.skipLive ? null : await fetchBostonPermitsLive(address);
+    source = records ? 'boston_live' : null;
+    if (!records) { records = FIXTURES[fixtureKey(address)]?.permits || null; source = records ? 'fixture' : 'none'; }
   }
+
   if (!records) {
     return { source: 'none', address, matched: geo?.matched || null,
       property: draftProperty(address, geo, null), systems: [], permits: [],
-      note: 'No public permit records found for this address. You can still build your record by hand.' };
+      note: isNJ
+        ? 'No NJ permit records returned. Confirm STEWARD_NJ_PERMITS_URL points at Bridgewater’s permit feed (see DEPLOY.md). You can still build your record by hand.'
+        : 'No public permit records found for this address. You can still build your record by hand.' };
   }
 
   const { systems, permits } = extractSystems(records);

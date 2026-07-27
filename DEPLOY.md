@@ -134,12 +134,67 @@ docker-compose pull && docker-compose up -d --build   # update to a new commit
 docker-compose down                 # stop everything (data volume persists)
 ```
 
-To pull a new version of the code after I push more changes:
+## Updating without losing data (safe runbook)
+
+**Your data is safe across updates.** It lives in the `steward-data` Docker
+volume, which `docker-compose up -d --build` never touches. Schema changes
+migrate your existing database in place on startup — you do **not** need to
+reseed. **Never run `npm run reset` on a database with real data — it wipes
+everything.** (Reset is only for refreshing throwaway demo data.)
+
+The safe update sequence, run in `/volume1/docker/steward`:
 
 ```bash
-git pull
-docker-compose up -d --build
+sudo docker-compose exec steward npm run backup   # 1. snapshot first (belt & braces)
+git pull                                           # 2. get the new code
+sudo docker-compose up -d --build                  # 3. rebuild + restart (data persists, migrates)
 ```
+
+Then hard-refresh your browser (Ctrl-Shift-R). New regions and other shared
+config apply automatically on startup — no reset needed.
+
+### Backups & restore
+
+`npm run backup` writes a consistent snapshot to `data/backups/` inside the
+volume (safe to run live; keeps the last 20):
+
+```bash
+sudo docker-compose exec steward npm run backup
+sudo docker-compose exec steward ls -lh /app/data/backups   # list snapshots
+```
+
+To **restore** a snapshot, stop the app, copy it over the live DB, restart:
+
+```bash
+sudo docker-compose stop steward
+sudo docker-compose run --rm --entrypoint sh steward -c \
+  'cp /app/data/backups/steward-<STAMP>.db /app/data/steward.db && rm -f /app/data/steward.db-wal /app/data/steward.db-shm'
+sudo docker-compose up -d steward
+```
+
+## New Jersey permit lookup (address auto-build)
+
+The Boston auto-build works out of the box. For **Bridgewater, NJ**, set
+`STEWARD_NJ_PERMITS_URL` to Bridgewater's live permit feed — a URL template
+with `{street}` / `{zip}` placeholders that returns a Socrata-style JSON array
+or an ArcGIS FeatureServer response. Add it to a `.env` file next to
+`docker-compose.yml`:
+
+```bash
+STEWARD_NJ_PERMITS_URL=https://<the-feed>?...{street}...
+```
+
+Then `sudo docker-compose up -d`. Find/verify the feed by testing it directly
+from the NAS first (a lookup for **337 Garretson Rd** should return records):
+
+```bash
+curl -s "https://<the-feed>?...337%20Garretson..." | head -c 800
+```
+
+The lookup maps common field names automatically (permit number, description,
+issued date, status, contractor), so most NJ feeds work by just setting the
+URL. If it's unset or returns nothing, the NJ auto-build reports that no
+records were found and the owner can still build the record by hand.
 
 ## If you don't want the LAN port open
 

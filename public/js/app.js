@@ -78,15 +78,19 @@ async function renderSignup() {
         <select class="control" name="market_id" required>
           ${markets.map((m) => `<option value="${m.id}">${m.name} (${m.city}, ${m.state})</option>`).join('')}
         </select></label>
+      <div class="field"><span class="field-label">Choose your plan</span>
+        <label class="plan-choice"><input type="radio" name="tier" value="basic" checked>
+          <span><b>Basic</b> — free. You build your record; the engine schedules from it.</span></label>
+        <label class="plan-choice"><input type="radio" name="tier" value="enhanced">
+          <span><b>Enhanced</b> — <s>$120/yr</s> <b>free during the demo</b>. AI recommendations,
+          the full 5-year forecast, and address auto-build.</span></label>
+      </div>
       <button class="btn btn-primary" style="width:100%;padding:10px" type="submit">Create my account</button>
       <div style="text-align:center;margin-top:14px" class="small">
         Already a member? <a href="#" id="show-login">Sign in</a>
       </div>
       <div class="login-demo">
-        Basic is the free plan: you build and maintain your own Home Record, and the
-        maintenance engine generates your schedule. Upgrade to <b>Enhanced</b> any time
-        for AI-tailored recommendations and the full capital forecast.
-        <b>Payments are disabled in this deployment.</b>
+        You can switch plans any time from your account. <b>Payments are disabled in this deployment.</b>
       </div>
     </form>
   </div>`;
@@ -99,7 +103,8 @@ async function renderSignup() {
       const data = await api('/api/signup', { method: 'POST', body: {
         first_name: e.target.first_name.value, last_name: e.target.last_name.value,
         email: e.target.email.value, password: e.target.password.value,
-        market_id: Number(e.target.market_id.value) } });
+        market_id: Number(e.target.market_id.value),
+        tier: e.target.tier.value } });
       state.me = data;
       toast('Welcome to Steward — let’s document your home');
       await boot();

@@ -147,6 +147,26 @@ function migrate(handle) {
       WHERE equipment_id IS NOT NULL AND system_id IS NULL
         AND (SELECT e.system_id FROM equipment e WHERE e.id = ${tbl}.equipment_id) IS NOT NULL`);
   }
+  ensureReferenceData(handle);
+}
+
+// Idempotent reference data — regions and other shared config applied on every
+// startup, so a code update adds them to a LIVE database without a reset (and
+// without touching user data). Add new markets here to roll them out safely.
+const REGIONS = [
+  { name: 'Central New Jersey', city: 'Bridgewater', state: 'NJ', zips: '08807,08805,08876', notes: 'Self-serve region.' },
+];
+function ensureReferenceData(handle) {
+  const findMarket = handle.prepare('SELECT id FROM markets WHERE name = ?');
+  const addMarket = handle.prepare(
+    `INSERT INTO markets (name, city, state, launch_date, active_zip_codes, status, notes)
+     VALUES (?,?,?,?,?, 'active', ?)`);
+  for (const r of REGIONS) {
+    if (!findMarket.get(r.name)) {
+      addMarket.run(r.name, r.city, r.state, null, r.zips, r.notes);
+      console.log(`[migrate] added region: ${r.name}`);
+    }
+  }
 }
 
 function open() {

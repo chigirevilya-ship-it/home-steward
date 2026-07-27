@@ -162,6 +162,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 13.5px; margin-bottom: 12px; }
 .checkbox-row input { width: 15px; height: 15px; accent-color: var(--brand); }
+.plan-choice { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.45;
+  border: 1px solid var(--hairline); border-radius: 8px; padding: 9px 11px; margin-top: 6px; cursor: pointer; }
+.plan-choice input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--brand); }
+.plan-choice:has(input:checked) { border-color: var(--brand); background: var(--surface-2); }
 
 .star-input .star { background: none; border: none; font-size: 26px; color: var(--hairline-2); cursor: pointer; padding: 0 2px; }
 .star-input .star.on { color: var(--accent); }

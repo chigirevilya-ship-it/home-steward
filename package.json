@@ -8,6 +8,7 @@
     "start": "node server/index.js",
     "seed": "node server/seed.js",
     "reset": "node server/seed.js --reset",
+    "backup": "node server/backup.js",
     "set-password": "node server/set-password.js"
   },
   "license": "UNLICENSED"

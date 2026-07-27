@@ -76,7 +76,8 @@ async function renderSignup() {
         <input class="control" name="password" type="password" autocomplete="new-password" minlength="8" required></label>
       <label class="field"><span class="field-label">Your metro area</span>
         <select class="control" name="market_id" required>
-          ${markets.map((m) => `<option value="${m.id}">${m.name} (${m.city}, ${m.state})</option>`).join('')}
+          ${markets.map((m) => { const loc = [m.city, m.state].filter(Boolean).join(', ');
+            return `<option value="${m.id}">${m.name}${loc ? ` (${loc})` : ''}</option>`; }).join('')}
         </select></label>
       <div class="field"><span class="field-label">Choose your plan</span>
         <label class="plan-choice"><input type="radio" name="tier" value="basic" checked>

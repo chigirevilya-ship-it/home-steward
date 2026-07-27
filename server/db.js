@@ -154,7 +154,7 @@ function migrate(handle) {
 // startup, so a code update adds them to a LIVE database without a reset (and
 // without touching user data). Add new markets here to roll them out safely.
 const REGIONS = [
-  { name: 'Central New Jersey', city: 'Bridgewater', state: 'NJ', zips: '08807,08805,08876', notes: 'Self-serve region.' },
+  { name: 'Central New Jersey', city: null, state: 'NJ', zips: '08807,08805,08876', notes: 'Self-serve region.' },
 ];
 function ensureReferenceData(handle) {
   const findMarket = handle.prepare('SELECT id FROM markets WHERE name = ?');
@@ -167,6 +167,9 @@ function ensureReferenceData(handle) {
       console.log(`[migrate] added region: ${r.name}`);
     }
   }
+  // Self-heal an earlier label ("Central New Jersey (Bridgewater, NJ)") on a
+  // live DB — show just the region, no city.
+  handle.exec("UPDATE markets SET city = NULL WHERE name = 'Central New Jersey' AND city IS NOT NULL");
 }
 
 function open() {

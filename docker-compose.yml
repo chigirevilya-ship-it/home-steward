@@ -14,11 +14,16 @@ services:
       # Without a key, the Suggest button falls back to the built-in
       # maintenance rule library — the app works fully either way.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      # Optional: live NJ permit source for address auto-build (Bridgewater).
-      # A URL template with {street}/{zip} returning a Socrata-style JSON array
-      # or an ArcGIS FeatureServer response. Unset = NJ auto-build returns
-      # nothing (see DEPLOY.md → "New Jersey permit lookup").
+      # Optional: live NJ permit source for address auto-build (Bridgewater
+      # uses an SDL Portal, which searches via a JSON API). URL is a template
+      # with {street}/{zip}; METHOD is GET (default) or POST; BODY is a POST
+      # JSON payload template (also {street}/{zip}); PATH is an optional
+      # dot-path to the records array in the response. Unset = NJ auto-build
+      # returns nothing (see DEPLOY.md → "New Jersey permit lookup").
       - STEWARD_NJ_PERMITS_URL=${STEWARD_NJ_PERMITS_URL:-}
+      - STEWARD_NJ_PERMITS_METHOD=${STEWARD_NJ_PERMITS_METHOD:-}
+      - STEWARD_NJ_PERMITS_BODY=${STEWARD_NJ_PERMITS_BODY:-}
+      - STEWARD_NJ_PERMITS_PATH=${STEWARD_NJ_PERMITS_PATH:-}
     volumes:
       - steward-data:/app/data
     # Only needed if you want LAN access directly (bypassing the tunnel) too,

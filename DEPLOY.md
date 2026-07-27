@@ -174,27 +174,61 @@ sudo docker-compose up -d steward
 
 ## New Jersey permit lookup (address auto-build)
 
-The Boston auto-build works out of the box. For **Bridgewater, NJ**, set
-`STEWARD_NJ_PERMITS_URL` to Bridgewater's live permit feed — a URL template
-with `{street}` / `{zip}` placeholders that returns a Socrata-style JSON array
-or an ArcGIS FeatureServer response. Add it to a `.env` file next to
-`docker-compose.yml`:
+The Boston auto-build works out of the box. **Bridgewater, NJ** publishes its
+permits through an **SDL Portal** (Selectron/SDL "Citizen Access"–style site),
+which is a single-page app: the visible search box calls a backend **JSON
+API** in the background. Steward talks to that JSON API directly. You wire it
+up with four environment variables in a `.env` file next to
+`docker-compose.yml` — no code change needed.
+
+**Step 1 — capture the portal's real request.** Open Bridgewater's SDL permit
+search in a desktop browser, open **DevTools → Network**, and run a search for
+a known address (use **337 Garretson Rd**). In the Network list, find the
+request that returns the permit results as JSON (usually a `POST` to a
+`.../search` or `.../api/...` URL — click each XHR/fetch row and check its
+**Response** tab for the permit rows). From that request note:
+
+- the **Request URL**,
+- the **Method** (GET or POST),
+- for POST, the **Request Payload** (the JSON body it sends), and
+- where the permit array sits in the **Response** JSON (e.g. top-level array,
+  or nested under `data` / `results`).
+
+**Step 2 — set the env vars.** Put `{street}` and `{zip}` where the address
+goes. For an SDL POST search it typically looks like:
 
 ```bash
-STEWARD_NJ_PERMITS_URL=https://<the-feed>?...{street}...
+STEWARD_NJ_PERMITS_URL=https://<portal-host>/api/permits/search
+STEWARD_NJ_PERMITS_METHOD=POST
+STEWARD_NJ_PERMITS_BODY={"address":"{street}","zip":"{zip}","page":1}
+# Only if the array is nested — e.g. {"data":{"results":[ ... ]}}:
+STEWARD_NJ_PERMITS_PATH=data.results
 ```
 
-Then `sudo docker-compose up -d`. Find/verify the feed by testing it directly
-from the NAS first (a lookup for **337 Garretson Rd** should return records):
+For a simpler GET feed (some towns expose a Socrata/ArcGIS endpoint), just set
+the URL with `{street}`/`{zip}` in the query string and leave `METHOD` unset
+(defaults to GET):
 
 ```bash
-curl -s "https://<the-feed>?...337%20Garretson..." | head -c 800
+STEWARD_NJ_PERMITS_URL=https://<the-feed>?address={street}&zip={zip}
 ```
 
-The lookup maps common field names automatically (permit number, description,
-issued date, status, contractor), so most NJ feeds work by just setting the
-URL. If it's unset or returns nothing, the NJ auto-build reports that no
-records were found and the owner can still build the record by hand.
+**Step 3 — apply and verify.** `sudo docker-compose up -d`, then test the exact
+request from the NAS first (a lookup for **337 Garretson Rd** should return
+records):
+
+```bash
+# POST example — mirror the DevTools payload:
+curl -s -X POST "https://<portal-host>/api/permits/search" \
+  -H 'content-type: application/json' \
+  -d '{"address":"337 Garretson Rd","zip":"08807","page":1}' | head -c 800
+```
+
+Steward maps common field names automatically (permit number, description,
+issued date, status, contractor), so once the request/response shape matches,
+the address auto-build populates systems from the returned permits. If the
+variables are unset or the feed returns nothing, the NJ auto-build reports
+that no records were found and the owner can still build the record by hand.
 
 ## If you don't want the LAN port open
 

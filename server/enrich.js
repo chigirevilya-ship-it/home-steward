@@ -168,30 +168,47 @@ async function fetchBostonPermitsLive(address) {
 const { FIXTURES, fixtureKey } = require('./enrich-fixtures');
 
 // NJ construction permits (live only — no bundled fallback, by request). The
-// exact per-address source varies by town and is configured with an env var so
-// it can be pointed at Bridgewater's real feed without a code change:
+// per-address source varies by town (Bridgewater uses an SDL portal, which is
+// a single-page app posting a search to a backend JSON API). It's configured
+// with env vars so the real feed is wired without a code change:
 //
-//   STEWARD_NJ_PERMITS_URL — a URL template with {street} / {zip} placeholders,
-//   returning a Socrata-style JSON array or an ArcGIS FeatureServer response.
-//   e.g. https://data.nj.gov/resource/XXXX.json?$q={street}
-//        https://<host>/arcgis/rest/services/.../query?f=json&where=ADDRESS LIKE '%{street}%'&outFields=*
+//   STEWARD_NJ_PERMITS_URL    — URL template with {street}/{zip} placeholders.
+//   STEWARD_NJ_PERMITS_METHOD — GET (default) or POST.
+//   STEWARD_NJ_PERMITS_BODY   — POST only: a JSON body template with
+//                               {street}/{zip} (SDL-style search payloads).
+//   STEWARD_NJ_PERMITS_PATH   — optional dot-path to the records array in the
+//                               response (e.g. "data.results"); default: auto.
 //
-// Whatever the source's field names are, the normalizer below maps the common
-// ones (permit number, description, issued date, status, contractor) into the
-// shape the classifier reads, so most NJ feeds work by just setting the URL.
+// e.g. (Socrata) URL=https://data.nj.gov/resource/XXXX.json?$q={street}
+//      (ArcGIS)  URL=https://host/FeatureServer/0/query?f=json&where=ADDRESS LIKE '%{street}%'&outFields=*
+//      (SDL/POST) URL=https://<town>.sdlportal.com/api/<search>  METHOD=POST
+//                 BODY={"address":"{street}","zip":"{zip}"}
+//
+// The normalizer maps common field names into the shape the classifier reads,
+// so most feeds work by just setting these.
 async function fetchNjPermitsLive(address) {
   const tmpl = process.env.STEWARD_NJ_PERMITS_URL;
   if (!tmpl) return null; // no source configured → nothing to look up
   const street = address.split(',')[0].trim();
-  const zipMatch = address.match(/\b(\d{5})\b/);
-  const url = tmpl.replace(/\{street\}/g, encodeURIComponent(street))
-    .replace(/\{zip\}/g, encodeURIComponent(zipMatch ? zipMatch[1] : ''));
+  const zip = (address.match(/\b(\d{5})\b/) || [])[1] || '';
+  const enc = (s) => s.replace(/\{street\}/g, encodeURIComponent(street)).replace(/\{zip\}/g, encodeURIComponent(zip));
+  const raw = (s) => s.replace(/\{street\}/g, street.replace(/["\\]/g, '\\$&')).replace(/\{zip\}/g, zip);
+  const method = (process.env.STEWARD_NJ_PERMITS_METHOD || 'GET').toUpperCase();
+  const bodyTmpl = process.env.STEWARD_NJ_PERMITS_BODY;
+  const arrPath = process.env.STEWARD_NJ_PERMITS_PATH;
   try {
     return await withTimeout(async (signal) => {
-      const res = await fetch(url, { signal, headers: { accept: 'application/json' } });
+      const init = { signal, method, headers: { accept: 'application/json' } };
+      if (method === 'POST' && bodyTmpl) { init.headers['content-type'] = 'application/json'; init.body = raw(bodyTmpl); }
+      const res = await fetch(enc(tmpl), init);
       if (!res.ok) throw new Error(`nj source ${res.status}`);
       const data = await res.json();
-      const rows = Array.isArray(data) ? data : (data.features ? data.features.map((f) => f.attributes || f.properties || f) : data.records || []);
+      let rows;
+      if (arrPath) rows = arrPath.split('.').reduce((o, k) => (o == null ? o : o[k]), data);
+      else rows = Array.isArray(data) ? data
+        : (data.features ? data.features.map((f) => f.attributes || f.properties || f)
+          : data.records || data.results || data.data || []);
+      if (!Array.isArray(rows)) return null;
       const norm = rows.map(normalizeNjRecord).filter((r) => r.description || r.permitnumber);
       return norm.length ? norm : null;
     }, 20000);

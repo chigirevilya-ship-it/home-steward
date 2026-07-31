@@ -155,6 +155,7 @@ function migrate(handle) {
 // without touching user data). Add new markets here to roll them out safely.
 const REGIONS = [
   { name: 'Central New Jersey', city: null, state: 'NJ', zips: '08807,08805,08876', notes: 'Self-serve region.' },
+  { name: 'Hampton Roads', city: null, state: 'VA', zips: '23451,23452,23453,23454,23455,23456,23457,23459,23460,23461,23462,23464,23320,23322,23323,23324,23325,23502,23503,23504,23505,23508,23510,23517,23518', notes: 'Self-serve region. Virginia Beach permit auto-build built in.' },
 ];
 function ensureReferenceData(handle) {
   const findMarket = handle.prepare('SELECT id FROM markets WHERE name = ?');

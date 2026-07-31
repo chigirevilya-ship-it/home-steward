@@ -172,7 +172,43 @@ sudo docker-compose run --rm --entrypoint sh steward -c \
 sudo docker-compose up -d steward
 ```
 
-## New Jersey permit lookup (address auto-build)
+## Address auto-build: per-state permit feeds
+
+Address auto-build drafts a Home Record from public permit records. Each state
+is wired independently via `STEWARD_<ST>_PERMITS_*` env vars (`<ST>` = the
+two-letter state code). **Boston, MA** and **Virginia Beach, VA** work out of
+the box; **New Jersey** needs a feed URL set.
+
+### Virginia (Hampton Roads / Virginia Beach) — works out of the box
+
+Virginia Beach publishes its **"Building Permits Applications"** dataset as a
+public **ArcGIS FeatureServer**, and Steward ships that feed as the built-in VA
+default — a lookup for **5445 Brookfield Dr, Virginia Beach, VA 23464** returns
+records with no configuration.
+
+Verify it from the NAS (the built-in query, with the address filled in):
+
+```bash
+curl -s "https://services2.arcgis.com/CyVvlIiUfRBmMQuu/arcgis/rest/services/Building_Permits_Applications_view/FeatureServer/0/query?f=json&outFields=*&resultRecordCount=5&where=UPPER(StreetAddress)%20LIKE%20UPPER('%255445%20Brookfield%20Dr%25')" | head -c 1200
+```
+
+If that returns `"features": [ … ]`, the in-app lookup works. If Virginia Beach
+ever renames the address field (the query filters on `StreetAddress`), discover
+the current name once and override the default:
+
+```bash
+# List the layer's field names:
+curl -s "https://services2.arcgis.com/CyVvlIiUfRBmMQuu/arcgis/rest/services/Building_Permits_Applications_view/FeatureServer/0?f=json" \
+  | tr ',' '\n' | grep -i '"name"'
+```
+
+Then set (in a `.env` next to `docker-compose.yml`) `STEWARD_VA_PERMITS_URL` to
+the same URL with the corrected field name, keeping the `{street}` placeholder,
+and `sudo docker-compose up -d`. To point VA at a *different* Hampton Roads
+town's feed (Norfolk, Chesapeake, etc.), set `STEWARD_VA_PERMITS_URL` to that
+town's ArcGIS query or Socrata endpoint (same `{street}`/`{zip}` template).
+
+### New Jersey (Bridgewater) — set a feed to enable
 
 The Boston auto-build works out of the box. **Bridgewater, NJ** publishes its
 permits through an **SDL Portal** (Selectron/SDL "Citizen Access"–style site),

@@ -167,41 +167,54 @@ async function fetchBostonPermitsLive(address) {
 // ── Bundled fixture (real-shaped Boston records) for offline / demo ─────────
 const { FIXTURES, fixtureKey } = require('./enrich-fixtures');
 
-// NJ construction permits (live only — no bundled fallback, by request). The
-// per-address source varies by town (Bridgewater uses an SDL portal, which is
-// a single-page app posting a search to a backend JSON API). It's configured
-// with env vars so the real feed is wired without a code change:
+// Per-state live permit sources (live only — no bundled fallback, by request).
+// Each supported state resolves a feed from env vars so the real source is
+// wired without a code change:
 //
-//   STEWARD_NJ_PERMITS_URL    — URL template with {street}/{zip} placeholders.
-//   STEWARD_NJ_PERMITS_METHOD — GET (default) or POST.
-//   STEWARD_NJ_PERMITS_BODY   — POST only: a JSON body template with
-//                               {street}/{zip} (SDL-style search payloads).
-//   STEWARD_NJ_PERMITS_PATH   — optional dot-path to the records array in the
-//                               response (e.g. "data.results"); default: auto.
+//   STEWARD_<ST>_PERMITS_URL    — URL template with {street}/{zip} placeholders.
+//   STEWARD_<ST>_PERMITS_METHOD — GET (default) or POST.
+//   STEWARD_<ST>_PERMITS_BODY   — POST only: a JSON body template with
+//                                 {street}/{zip} (e.g. SDL-portal search payloads).
+//   STEWARD_<ST>_PERMITS_PATH   — optional dot-path to the records array in the
+//                                 response (e.g. "data.results"); default: auto.
 //
-// e.g. (Socrata) URL=https://data.nj.gov/resource/XXXX.json?$q={street}
-//      (ArcGIS)  URL=https://host/FeatureServer/0/query?f=json&where=ADDRESS LIKE '%{street}%'&outFields=*
-//      (SDL/POST) URL=https://<town>.sdlportal.com/api/<search>  METHOD=POST
-//                 BODY={"address":"{street}","zip":"{zip}"}
+// <ST> is the two-letter state code (NJ, VA, …). Examples:
+//   (Socrata)  URL=https://data.nj.gov/resource/XXXX.json?$q={street}
+//   (ArcGIS)   URL=https://host/FeatureServer/0/query?f=json&outFields=*&where=UPPER(ADDR) LIKE UPPER('%{street}%')
+//   (SDL/POST) URL=https://<town>.sdlportal.com/api/<search>  METHOD=POST
+//              BODY={"address":"{street}","zip":"{zip}"}
 //
+// STATE_DEFAULTS ships a working feed for a state so its lookup works out of
+// the box; the env var above overrides it (e.g. to point at a different town).
+// VA defaults to Virginia Beach's public "Building Permits Applications"
+// ArcGIS FeatureServer. The %25...%25 are pre-encoded % wildcards; {street} is
+// substituted (URL-encoded) at request time. If a town publishes elsewhere,
+// set STEWARD_VA_PERMITS_URL to override.
+const STATE_DEFAULTS = {
+  VA: {
+    url: "https://services2.arcgis.com/CyVvlIiUfRBmMQuu/arcgis/rest/services/Building_Permits_Applications_view/FeatureServer/0/query?f=json&outFields=*&resultRecordCount=100&where=UPPER(StreetAddress)%20LIKE%20UPPER('%25{street}%25')",
+  },
+};
+
 // The normalizer maps common field names into the shape the classifier reads,
-// so most feeds work by just setting these.
-async function fetchNjPermitsLive(address) {
-  const tmpl = process.env.STEWARD_NJ_PERMITS_URL;
+// so most feeds work by just setting the URL.
+async function fetchStatePermitsLive(address, state) {
+  const st = String(state || '').toUpperCase();
+  const tmpl = process.env[`STEWARD_${st}_PERMITS_URL`] || STATE_DEFAULTS[st]?.url;
   if (!tmpl) return null; // no source configured → nothing to look up
   const street = address.split(',')[0].trim();
   const zip = (address.match(/\b(\d{5})\b/) || [])[1] || '';
   const enc = (s) => s.replace(/\{street\}/g, encodeURIComponent(street)).replace(/\{zip\}/g, encodeURIComponent(zip));
   const raw = (s) => s.replace(/\{street\}/g, street.replace(/["\\]/g, '\\$&')).replace(/\{zip\}/g, zip);
-  const method = (process.env.STEWARD_NJ_PERMITS_METHOD || 'GET').toUpperCase();
-  const bodyTmpl = process.env.STEWARD_NJ_PERMITS_BODY;
-  const arrPath = process.env.STEWARD_NJ_PERMITS_PATH;
+  const method = (process.env[`STEWARD_${st}_PERMITS_METHOD`] || 'GET').toUpperCase();
+  const bodyTmpl = process.env[`STEWARD_${st}_PERMITS_BODY`];
+  const arrPath = process.env[`STEWARD_${st}_PERMITS_PATH`];
   try {
     return await withTimeout(async (signal) => {
       const init = { signal, method, headers: { accept: 'application/json' } };
       if (method === 'POST' && bodyTmpl) { init.headers['content-type'] = 'application/json'; init.body = raw(bodyTmpl); }
       const res = await fetch(enc(tmpl), init);
-      if (!res.ok) throw new Error(`nj source ${res.status}`);
+      if (!res.ok) throw new Error(`${st} source ${res.status}`);
       const data = await res.json();
       let rows;
       if (arrPath) rows = arrPath.split('.').reduce((o, k) => (o == null ? o : o[k]), data);
@@ -209,37 +222,51 @@ async function fetchNjPermitsLive(address) {
         : (data.features ? data.features.map((f) => f.attributes || f.properties || f)
           : data.records || data.results || data.data || []);
       if (!Array.isArray(rows)) return null;
-      const norm = rows.map(normalizeNjRecord).filter((r) => r.description || r.permitnumber);
+      const norm = rows.map(normalizeRecord).filter((r) => r.description || r.permitnumber);
       return norm.length ? norm : null;
     }, 20000);
   } catch { return null; }
 }
 
+// Which states use a configured/default live source (vs. the Boston path).
+const CONFIGURED_STATES = new Set(['NJ', 'VA']);
+function hasStateSource(state) {
+  const st = String(state || '').toUpperCase();
+  return CONFIGURED_STATES.has(st) || !!(process.env[`STEWARD_${st}_PERMITS_URL`] || STATE_DEFAULTS[st]);
+}
+
 const pickField = (o, keys) => { for (const k of Object.keys(o)) if (keys.includes(k.toLowerCase())) return o[k]; return null; };
-function normalizeNjRecord(o) {
+// ArcGIS date fields come back as epoch milliseconds; coerce to YYYY-MM-DD.
+function coerceDate(v) {
+  if (typeof v === 'number' && v > 0) { const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); }
+  return v;
+}
+function normalizeRecord(o) {
   return {
     permitnumber: pickField(o, ['permitnumber', 'permit_number', 'permit_no', 'permit', 'permitnum', 'record_number']),
-    worktype: pickField(o, ['worktype', 'work_type', 'permit_type', 'permittype', 'type']),
-    permittypedescr: pickField(o, ['permittypedescr', 'permit_type_description', 'type_description', 'subtype']),
-    description: pickField(o, ['description', 'work_description', 'scope', 'scope_of_work', 'permit_description', 'project_description']),
+    worktype: pickField(o, ['worktype', 'work_type', 'permit_type', 'permittype', 'type', 'permitclass', 'permittypename']),
+    permittypedescr: pickField(o, ['permittypedescr', 'permit_type_description', 'type_description', 'subtype', 'permitsubtype']),
+    description: pickField(o, ['description', 'work_description', 'workdesc', 'work_desc', 'scope', 'scope_of_work', 'permit_description', 'project_description', 'projectname']),
     comments: pickField(o, ['comments', 'notes', 'remarks']),
-    applicant: pickField(o, ['applicant', 'contractor', 'contractor_name', 'business_name', 'company']),
-    issued_date: pickField(o, ['issued_date', 'issue_date', 'date_issued', 'issueddate', 'status_date', 'application_date']),
-    status: pickField(o, ['status', 'permit_status', 'record_status']),
-    occupancytype: pickField(o, ['occupancytype', 'occupancy', 'use', 'property_use']),
-    address: pickField(o, ['address', 'full_address', 'site_address', 'location']),
+    applicant: pickField(o, ['applicant', 'contractor', 'contractor_name', 'contractorname', 'business_name', 'company', 'owner_name']),
+    issued_date: coerceDate(pickField(o, ['issued_date', 'issue_date', 'issuedate', 'date_issued', 'issueddate', 'status_date', 'application_date', 'applieddate'])),
+    status: pickField(o, ['status', 'permit_status', 'record_status', 'statuscurrent']),
+    occupancytype: pickField(o, ['occupancytype', 'occupancy', 'use', 'property_use', 'usetype']),
+    address: pickField(o, ['address', 'full_address', 'site_address', 'streetaddress', 'location', 'parceladdress']),
   };
 }
 
 async function enrichAddress(address, opts = {}) {
   const geo = opts.skipGeocode ? null : await geocode(address);
   const state = String(geo?.state || (address.match(/,\s*([A-Za-z]{2})\b/) || [])[1] || '').toUpperCase();
-  const isNJ = state === 'NJ' || /\bnew jersey\b/i.test(address);
+  // States other than MA go through the per-state configured/default feed;
+  // MA (and unknown) use the Boston open-data path with its bundled fixture.
+  const useState = state && state !== 'MA' && hasStateSource(state);
 
   let records = null, source = 'none';
-  if (isNJ) {
-    records = opts.skipLive ? null : await fetchNjPermitsLive(address);
-    source = records ? 'nj_live' : 'none';
+  if (useState) {
+    records = opts.skipLive ? null : await fetchStatePermitsLive(address, state);
+    source = records ? `${state.toLowerCase()}_live` : 'none';
   } else {
     records = opts.skipLive ? null : await fetchBostonPermitsLive(address);
     source = records ? 'boston_live' : null;
@@ -249,8 +276,8 @@ async function enrichAddress(address, opts = {}) {
   if (!records) {
     return { source: 'none', address, matched: geo?.matched || null,
       property: draftProperty(address, geo, null), systems: [], permits: [],
-      note: isNJ
-        ? 'No NJ permit records returned. Confirm STEWARD_NJ_PERMITS_URL points at Bridgewater’s permit feed (see DEPLOY.md). You can still build your record by hand.'
+      note: useState
+        ? `No ${state} permit records returned for this address. Confirm STEWARD_${state}_PERMITS_URL points at the local permit feed (see DEPLOY.md). You can still build your record by hand.`
         : 'No public permit records found for this address. You can still build your record by hand.' };
   }
 

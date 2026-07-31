@@ -14,16 +14,22 @@ services:
       # Without a key, the Suggest button falls back to the built-in
       # maintenance rule library — the app works fully either way.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      # Optional: live NJ permit source for address auto-build (Bridgewater
-      # uses an SDL Portal, which searches via a JSON API). URL is a template
-      # with {street}/{zip}; METHOD is GET (default) or POST; BODY is a POST
-      # JSON payload template (also {street}/{zip}); PATH is an optional
-      # dot-path to the records array in the response. Unset = NJ auto-build
-      # returns nothing (see DEPLOY.md → "New Jersey permit lookup").
+      # Optional: per-state live permit sources for address auto-build. Each
+      # state code (NJ, VA, …) resolves STEWARD_<ST>_PERMITS_URL (template with
+      # {street}/{zip}); _METHOD is GET (default) or POST; _BODY is a POST JSON
+      # payload template; _PATH is an optional dot-path to the records array.
+      # VA ships with a working default (Virginia Beach's public ArcGIS permit
+      # feed) — leave VA unset to use it, or set it to point at another town.
+      # NJ (Bridgewater SDL Portal) has no default — set it to enable NJ.
+      # See DEPLOY.md → "Address auto-build: per-state permit feeds".
       - STEWARD_NJ_PERMITS_URL=${STEWARD_NJ_PERMITS_URL:-}
       - STEWARD_NJ_PERMITS_METHOD=${STEWARD_NJ_PERMITS_METHOD:-}
       - STEWARD_NJ_PERMITS_BODY=${STEWARD_NJ_PERMITS_BODY:-}
       - STEWARD_NJ_PERMITS_PATH=${STEWARD_NJ_PERMITS_PATH:-}
+      - STEWARD_VA_PERMITS_URL=${STEWARD_VA_PERMITS_URL:-}
+      - STEWARD_VA_PERMITS_METHOD=${STEWARD_VA_PERMITS_METHOD:-}
+      - STEWARD_VA_PERMITS_BODY=${STEWARD_VA_PERMITS_BODY:-}
+      - STEWARD_VA_PERMITS_PATH=${STEWARD_VA_PERMITS_PATH:-}
     volumes:
       - steward-data:/app/data
     # Only needed if you want LAN access directly (bypassing the tunnel) too,

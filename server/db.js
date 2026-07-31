@@ -129,6 +129,7 @@ function migrateTierCheck(handle) {
 function migrate(handle) {
   migrateTierCheck(handle);
   ensureColumn(handle, 'systems', 'active', 'active INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(handle, 'properties', 'lot_size', 'lot_size INTEGER');
   ensureColumn(handle, 'documents', 'equipment_id', 'equipment_id INTEGER REFERENCES equipment(id)');
   ensureColumn(handle, 'maintenance_log', 'equipment_id', 'equipment_id INTEGER REFERENCES equipment(id)');
   ensureColumn(handle, 'maintenance_log', 'performed_by', 'performed_by TEXT');

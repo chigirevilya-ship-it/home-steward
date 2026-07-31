@@ -14,6 +14,12 @@ services:
       # Without a key, the Suggest button falls back to the built-in
       # maintenance rule library — the app works fully either way.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Optional: powers nationwide property facts (beds/baths/sqft/year built/
+      # lot size/type) for address auto-build, via the RentCast API. Free tier
+      # is ~50 lookups/month; each home is fetched once. Without a key, the
+      # auto-build still drafts from permits — it just won't prefill the basics.
+      # Get a free key at rentcast.io/api (see DEPLOY.md → "Property facts").
+      - RENTCAST_API_KEY=${RENTCAST_API_KEY:-}
       # Optional: per-state live permit sources for address auto-build. Each
       # state code (NJ, VA, …) resolves STEWARD_<ST>_PERMITS_URL (template with
       # {street}/{zip}); _METHOD is GET (default) or POST; _BODY is a POST JSON

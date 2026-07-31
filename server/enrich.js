@@ -116,7 +116,11 @@ function mapPermitType(p) {
   return 'general_building';
 }
 const OCC_TO_TYPE = { '1fam': 'single_family', '2fam': 'two_family', '3fam': 'triple_decker',
-  '1-3fam': 'triple_decker', 'condo': 'condo', 'condominium': 'condo', 'row': 'townhouse' };
+  '1-3fam': 'triple_decker', 'condo': 'condo', 'condominium': 'condo', 'row': 'townhouse',
+  // RentCast / assessor propertyType strings:
+  'singlefamily': 'single_family', 'townhouse': 'townhouse', 'townhome': 'townhouse',
+  'multi-family': 'two_family', 'multifamily': 'two_family', 'duplex': 'two_family',
+  'apartment': 'condo' };
 function mapPropertyType(occ) {
   const v = String(occ || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
   for (const [k, val] of Object.entries(OCC_TO_TYPE)) if (v.includes(k)) return val;
@@ -161,6 +165,40 @@ async function fetchBostonPermitsLive(address) {
       const records = data.result?.records || [];
       return records.length ? records : null;
     }, 20000);
+  } catch { return null; }
+}
+
+// ── Nationwide property facts (RentCast) ────────────────────────────────────
+// Beds/baths/sqft/year-built/lot-size/type for ANY US address — the one source
+// that covers homes outside a wired permit jurisdiction and includes bedrooms
+// (public assessor feeds usually don't). Key-gated like the Claude key: with no
+// RENTCAST_API_KEY it no-ops and the rest of the draft still works. RentCast's
+// free tier is ~50 lookups/month, so callers cache the result per home rather
+// than re-fetching. https://developers.rentcast.io/reference/property-data
+const intOrNull = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Math.round(Number(v)));
+const numOrNull = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+async function fetchPropertyFacts(address) {
+  const key = process.env.RENTCAST_API_KEY;
+  if (!key) return null;
+  try {
+    return await withTimeout(async (signal) => {
+      const url = `https://api.rentcast.io/v1/properties?address=${encodeURIComponent(address)}`;
+      const res = await fetch(url, { signal, headers: { 'X-Api-Key': key, accept: 'application/json' } });
+      if (!res.ok) throw new Error(`rentcast ${res.status}`);
+      const data = await res.json();
+      const rec = Array.isArray(data) ? data[0]
+        : (Array.isArray(data?.properties) ? data.properties[0] : data);
+      if (!rec || typeof rec !== 'object') return null;
+      const facts = {
+        year_built: intOrNull(rec.yearBuilt),
+        square_footage: intOrNull(rec.squareFootage),
+        bedrooms: intOrNull(rec.bedrooms),
+        bathrooms: numOrNull(rec.bathrooms),
+        lot_size: intOrNull(rec.lotSize),
+        property_type: mapPropertyType(rec.propertyType),
+      };
+      return Object.values(facts).some((v) => v != null) ? facts : null;
+    }, 15000);
   } catch { return null; }
 }
 
@@ -263,6 +301,10 @@ async function enrichAddress(address, opts = {}) {
   // MA (and unknown) use the Boston open-data path with its bundled fixture.
   const useState = state && state !== 'MA' && hasStateSource(state);
 
+  // Nationwide property facts (beds/baths/sqft/year/lot/type) — independent of
+  // the permit source, so a home gets its basics even where no permits surface.
+  const facts = opts.skipLive ? null : await fetchPropertyFacts(address);
+
   let records = null, source = 'none';
   if (useState) {
     records = opts.skipLive ? null : await fetchStatePermitsLive(address, state);
@@ -274,11 +316,13 @@ async function enrichAddress(address, opts = {}) {
   }
 
   if (!records) {
-    return { source: 'none', address, matched: geo?.matched || null,
-      property: draftProperty(address, geo, null), systems: [], permits: [],
-      note: useState
-        ? `No ${state} permit records returned for this address. Confirm STEWARD_${state}_PERMITS_URL points at the local permit feed (see DEPLOY.md). You can still build your record by hand.`
-        : 'No public permit records found for this address. You can still build your record by hand.' };
+    return { source: facts ? 'facts_only' : 'none', address, matched: geo?.matched || null,
+      property: draftProperty(address, geo, null, null, facts), systems: [], permits: [],
+      note: facts
+        ? 'Filled in your home’s basics from public property data. No permit history surfaced for this address — add systems and permits as you go, or by hand.'
+        : useState
+          ? `No ${state} permit records returned for this address. Confirm STEWARD_${state}_PERMITS_URL points at the local permit feed (see DEPLOY.md). You can still build your record by hand.`
+          : 'No public permit records found for this address. You can still build your record by hand.' };
   }
 
   const { systems, permits } = extractSystems(records);
@@ -286,21 +330,25 @@ async function enrichAddress(address, opts = {}) {
     || FIXTURES[fixtureKey(address)]?.occupancytype;
   return {
     source, address, matched: geo?.matched || records[0]?.address || null,
-    property: draftProperty(address, geo, occ, FIXTURES[fixtureKey(address)]),
+    property: draftProperty(address, geo, occ, FIXTURES[fixtureKey(address)], facts),
     systems, permits,
   };
 }
 
-function draftProperty(address, geo, occ, fx) {
+function draftProperty(address, geo, occ, fx, facts) {
   const parts = address.split(',').map((s) => s.trim());
   return {
     address_line1: parts[0] || null,
     city: geo?.city || parts[1] || fx?.city || null,
     state: geo?.state || (parts[2] || '').split(' ')[0] || fx?.state || null,
     zip: geo?.zip || (parts[2] || '').split(' ')[1] || fx?.zip || null,
-    property_type: mapPropertyType(occ) || fx?.property_type || null,
-    year_built: fx?.year_built ?? null, // from assessor / commercial API when available
-    square_footage: fx?.square_footage ?? null,
+    // Facts (RentCast) take precedence, then assessor occupancy, then fixture.
+    property_type: facts?.property_type || mapPropertyType(occ) || fx?.property_type || null,
+    year_built: facts?.year_built ?? fx?.year_built ?? null,
+    square_footage: facts?.square_footage ?? fx?.square_footage ?? null,
+    bedrooms: facts?.bedrooms ?? null,
+    bathrooms: facts?.bathrooms ?? null,
+    lot_size: facts?.lot_size ?? null,
   };
 }
 

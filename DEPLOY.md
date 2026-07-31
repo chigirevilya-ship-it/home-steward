@@ -172,6 +172,35 @@ sudo docker-compose run --rm --entrypoint sh steward -c \
 sudo docker-compose up -d steward
 ```
 
+## Property facts (RentCast) — nationwide beds/baths/sqft/year built
+
+Address auto-build also prefills each home's **basics** — year built, square
+footage, bedrooms, bathrooms, lot size, and property type — from the
+[RentCast](https://www.rentcast.io/api) property API. It's **nationwide** (works
+for any US address, not just wired permit regions) and is the one source that
+includes bedrooms, which public assessor feeds usually omit.
+
+It's key-gated exactly like the Anthropic key — with no key set, the auto-build
+still drafts systems/permits, it just won't prefill the basics.
+
+1. Sign up for a free account at **rentcast.io/api** and copy your API key. The
+   free tier is ~50 lookups/month, which is plenty for alpha — Steward fetches
+   each home **once** (at auto-build time), it doesn't re-poll.
+2. Add it to the `.env` next to `docker-compose.yml`:
+
+   ```bash
+   RENTCAST_API_KEY=<your-key>
+   ```
+3. `sudo docker-compose up -d`. Verify from the NAS:
+
+   ```bash
+   curl -s "https://api.rentcast.io/v1/properties?address=5445%20Brookfield%20Dr,%20Virginia%20Beach,%20VA%2023464" \
+     -H "X-Api-Key: $RENTCAST_API_KEY" | head -c 800
+   ```
+
+   A JSON object/array with `bedrooms`, `squareFootage`, `yearBuilt` means it's
+   working; the "Build from my address" flow will now prefill those fields.
+
 ## Address auto-build: per-state permit feeds
 
 Address auto-build drafts a Home Record from public permit records. Each state

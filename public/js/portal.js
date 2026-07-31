@@ -41,8 +41,8 @@ function renderOnboarding(view, r) {
   ${r.self_serve ? `
   <div class="card card-pad" style="max-width:720px">
     <h2 class="serif" style="margin-bottom:6px">Start with your address</h2>
-    <p class="sub" style="margin-bottom:12px">Steward can draft your home from public permit records — systems, install
-    dates, and permit history — so you just confirm instead of typing it all in.</p>
+    <p class="sub" style="margin-bottom:12px">Steward can draft your home from public records — property details (year built,
+    size, beds/baths), systems, install dates, and permit history — so you just confirm instead of typing it all in.</p>
     <div class="form-grid">
       <div class="span2">${field('enrich_address', 'Full street address', input(`placeholder="35 Sample St, Boston, MA 02130"`))}</div>
     </div>
@@ -103,8 +103,8 @@ function renderEnrichDraft(view, r, draft) {
   view.innerHTML = `
   <div class="page-head"><div>
     <h1>Here’s your home, ${esc(r.client.first_name)}</h1>
-    <div class="sub">Drafted from ${draft.source === 'fixture' ? 'sample' : 'public'} permit records for
-    ${esc(p.address_line1 || draft.address)}. Uncheck anything that’s wrong, then create your record.</div>
+    <div class="sub">Drafted from ${draft.source === 'fixture' ? 'sample' : 'public'} records for
+    ${esc(p.address_line1 || draft.address)} — property details, systems, and permit history. Uncheck anything that’s wrong, then create your record.</div>
   </div></div>
   ${draft.source === 'none' ? `<div class="notice section" style="max-width:760px">${esc(draft.note || 'No public records found — enter your home manually instead.')}</div>` : ''}
   <div class="card card-pad" style="max-width:760px">
@@ -113,6 +113,9 @@ function renderEnrichDraft(view, r, draft) {
       <dt>Address</dt><dd>${esc([p.address_line1, p.city, p.state, p.zip].filter(Boolean).join(', ')) || '—'}</dd>
       <dt>Type</dt><dd>${p.property_type ? label(p.property_type) : '—'}</dd>
       <dt>Built</dt><dd>${p.year_built ?? '—'}</dd>
+      <dt>Size</dt><dd>${p.square_footage ? p.square_footage.toLocaleString() + ' sq ft' : '—'}</dd>
+      <dt>Beds / baths</dt><dd>${[p.bedrooms != null ? `${p.bedrooms} bd` : null, p.bathrooms != null ? `${p.bathrooms} ba` : null].filter(Boolean).join(' · ') || '—'}</dd>
+      <dt>Lot</dt><dd>${p.lot_size ? p.lot_size.toLocaleString() + ' sq ft' : '—'}</dd>
     </dl>
     <hr class="divider">
     <h3>Systems found (${draft.systems.length})</h3>

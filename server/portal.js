@@ -35,7 +35,7 @@ const VISIBLE = {
   contractor: ['id','company_name','primary_contact','email','phone','trades','preferred_pricing'],
   document: ['id','document_name','document_type','mime_type','size_bytes','system_id','system_name',
     'equipment_id','equipment_name','maintenance_log_id','permit_id','description','upload_date'],
-  property: ['id','address_line1','address_line2','city','state','zip','year_built','square_footage','stories',
+  property: ['id','address_line1','address_line2','city','state','zip','year_built','square_footage','lot_size','stories',
     'bedrooms','bathrooms','property_type','construction_type','foundation_type','ownership_date',
     'permit_jurisdiction','intake_date','record_completeness','narrative_summary'],
 };
@@ -274,7 +274,7 @@ function assertSelfServe(client) {
   }
 }
 
-const PROPERTY_WRITE = ['address_line1','address_line2','city','state','zip','year_built','square_footage',
+const PROPERTY_WRITE = ['address_line1','address_line2','city','state','zip','year_built','square_footage','lot_size',
   'stories','bedrooms','bathrooms','property_type','construction_type','foundation_type','ownership_date'];
 const SYSTEM_WRITE = ['system_name','category','description','install_date','age_at_intake','expected_lifespan',
   'condition_rating','model_number','serial_number','warranty_expiry','last_service_date'];
